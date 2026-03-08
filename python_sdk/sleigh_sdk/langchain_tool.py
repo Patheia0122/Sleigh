@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import json
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from .client import SleighClient
+
+
+class SleighToolInput(BaseModel):
+    session_token: str = Field(..., description="Session token (currently equal to session_id).")
+    action: Literal[
+        "create_sandbox",
+        "list_sandboxes",
+        "get_sandbox",
+        "delete_sandbox",
+        "create_snapshot",
+        "list_snapshots",
+        "rollback_snapshot",
+        "exec_command",
+        "get_exec",
+        "cancel_exec",
+        "list_mounts",
+        "mount_path",
+        "unmount_path",
+        "get_memory_pressure",
+        "expand_memory",
+        "list_session_exec_tasks",
+    ] = Field(..., description="Runtime action name to execute.")
+    sandbox_id: str | None = Field(None, description="Sandbox identifier.")
+    snapshot_id: str | None = Field(None, description="Snapshot identifier.")
+    exec_id: str | None = Field(None, description="Execution identifier.")
+    mount_id: str | None = Field(None, description="Mount identifier.")
+    command: str | None = Field(None, description="Command to execute in sandbox.")
+    image: str = Field("alpine:3.20", description="Container image when creating a sandbox.")
+    host_path: str | None = Field(None, description="Host path to mount.")
+    container_path: str | None = Field(None, description="Container mount path.")
+    mode: str = Field("rw", description="Mount mode: rw or ro.")
+    target_mb: int | None = Field(None, description="Target memory limit in MB.")
+    memory_limit_mb: int | None = Field(None, description="Sandbox memory limit in MB.")
+    session_id: str | None = Field(None, description="Session id for session history query.")
+    limit: int = Field(20, ge=1, le=200, description="Pagination page size.")
+    cursor: str | None = Field(None, description="Pagination cursor token.")
+
+
+class SleighLangChainClient:
+    def __init__(self, base_url: str, timeout_seconds: float = 30.0):
+        self.client = SleighClient(base_url=base_url, timeout_seconds=timeout_seconds)
+
+    def _dispatch(self, data: SleighToolInput) -> dict:
+        action = data.action
+        token = data.session_token
+
+        if action == "create_sandbox":
+            return self.client.create_sandbox(
+                session_token=token,
+                image=data.image,
+                memory_limit_mb=data.memory_limit_mb,
+            )
+        if action == "list_sandboxes":
+            return self.client.list_sandboxes(session_token=token)
+        if action == "get_sandbox":
+            return self.client.get_sandbox(session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id"))
+        if action == "delete_sandbox":
+            return self.client.delete_sandbox(session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id"))
+        if action == "create_snapshot":
+            return self.client.create_snapshot(session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id"))
+        if action == "list_snapshots":
+            return self.client.list_snapshots(session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id"))
+        if action == "rollback_snapshot":
+            return self.client.rollback_snapshot(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                snapshot_id=_require(data.snapshot_id, "snapshot_id"),
+            )
+        if action == "exec_command":
+            return self.client.exec_command(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                command=_require(data.command, "command"),
+            )
+        if action == "get_exec":
+            return self.client.get_exec(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                exec_id=_require(data.exec_id, "exec_id"),
+            )
+        if action == "cancel_exec":
+            return self.client.cancel_exec(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                exec_id=_require(data.exec_id, "exec_id"),
+            )
+        if action == "list_mounts":
+            return self.client.list_mounts(session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id"))
+        if action == "mount_path":
+            return self.client.mount_path(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                host_path=_require(data.host_path, "host_path"),
+                container_path=_require(data.container_path, "container_path"),
+                mode=data.mode,
+            )
+        if action == "unmount_path":
+            return self.client.unmount_path(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                mount_id=_require(data.mount_id, "mount_id"),
+            )
+        if action == "get_memory_pressure":
+            return self.client.get_memory_pressure(
+                session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id")
+            )
+        if action == "expand_memory":
+            return self.client.expand_memory(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                target_mb=int(_require(data.target_mb, "target_mb")),
+            )
+        if action == "list_session_exec_tasks":
+            return self.client.list_session_exec_tasks(
+                session_token=token,
+                session_id=_require(data.session_id, "session_id"),
+                limit=data.limit,
+                cursor=data.cursor,
+            )
+        raise ValueError(f"unsupported action: {action}")
+
+    def as_langchain_tool(
+        self,
+        name: str = "sleigh-runtime",
+        description: str | None = None,
+        return_direct: bool = True,
+        handle_tool_error: bool = True,
+    ):
+        try:
+            from langchain.tools import tool
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(
+                "LangChain is not installed. Run: pip install 'sleigh-sdk[langchain]'"
+            ) from exc
+
+        if description is None:
+            description = (
+                "Sleigh runtime unified tool. "
+                "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
+                "session_token is required for session-scoped access control."
+            )
+
+        @tool(
+            args_schema=SleighToolInput,
+            name=name,
+            description=description,
+            return_direct=return_direct,
+            handle_tool_error=handle_tool_error,
+            coroutine=False,
+        )
+        def runtime_tool(**kwargs) -> str:
+            try:
+                payload = SleighToolInput(**kwargs)
+                result = self._dispatch(payload)
+                return json.dumps(result, ensure_ascii=False)
+            except Exception as exc:  # pragma: no cover
+                return f"sleigh sdk error: {exc}"
+
+        return runtime_tool
+
+
+def _require(value, field_name: str):
+    if value is None:
+        raise ValueError(f"{field_name} is required for this action")
+    if isinstance(value, str) and value.strip() == "":
+        raise ValueError(f"{field_name} is required for this action")
+    return value

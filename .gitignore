@@ -1,0 +1,26 @@
+# Development process documents (archived)
+docs/dev-process/
+
+# Temporary/incomplete SDK examples
+python_sdk/examples/
+
+# Go cache / module cache
+server/.gopath/
+**/.gocache/
+
+# Python bytecode and caches
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Packaging artifacts
+*.egg-info/
+dist/
+build/
+
+# Local runtime state
+runtime-data/
+server/data/
