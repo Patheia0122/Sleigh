@@ -23,4 +23,4 @@ mcp = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sleigh_sdk*"]
+include = ["sdk*"]

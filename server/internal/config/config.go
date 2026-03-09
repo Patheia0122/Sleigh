@@ -21,13 +21,12 @@ const (
 	defaultWarmPoolImage              = "alpine:3.20"
 	defaultWarmPoolMemory             = 256
 	defaultSnapshotRootDir            = "./data/snapshots"
-	defaultEventRetryMax              = 5
-	defaultEventRetryInit             = 500
-	defaultEventRetryMaxMS            = 10000
-	defaultEventQueueSize             = 1024
 	defaultCursorTokenTTL             = 3600
 	defaultExecCleanupIntervalSeconds = 3600
-	defaultMountAllowedRoot           = "/opt/agent-heavyworks-runtime/mount-root-default"
+	defaultImagePullTimeoutSeconds    = 120
+	defaultSandboxIdleTTLDays         = 14
+	defaultMountAllowedRoot           = "/opt/sleigh-runtime/mount-root-default"
+	defaultOTELEndpoint               = ""
 )
 
 type Config struct {
@@ -37,7 +36,6 @@ type Config struct {
 	ShutdownTimeout            time.Duration
 	Version                    string
 	DBPath                     string
-	SessionManagerEventURL     string
 	MinExpandMB                int64
 	MaxExpandMB                int64
 	MaxExpandStepMB            int64
@@ -46,10 +44,9 @@ type Config struct {
 	WarmPoolImage              string
 	WarmPoolMemoryMB           int64
 	SnapshotRootDir            string
-	EventRetryMax              int
-	EventRetryInitialMS        int
-	EventRetryMaxMS            int
-	EventQueueSize             int
+	ImagePullTimeoutSeconds    int
+	SandboxIdleTTLDays         int
+	OTELEndpoint               string
 	CursorTokenSecret          string
 	CursorTokenTTLSeconds      int
 	ExecCleanupIntervalSeconds int
@@ -64,7 +61,6 @@ func FromEnv() Config {
 		ShutdownTimeout:            defaultShutdownTimeout,
 		Version:                    getEnv("SERVER_VERSION", defaultVersion),
 		DBPath:                     getEnv("SERVER_DB_PATH", defaultDBPath),
-		SessionManagerEventURL:     getEnv("SESSION_MANAGER_EVENTS_URL", ""),
 		MinExpandMB:                getEnvInt64("MEMORY_EXPAND_MIN_MB", defaultMinExpandMB),
 		MaxExpandMB:                getEnvInt64("MEMORY_EXPAND_MAX_MB", defaultMaxExpandMB),
 		MaxExpandStepMB:            getEnvInt64("MEMORY_EXPAND_MAX_STEP_MB", defaultMaxExpandStepMB),
@@ -73,10 +69,9 @@ func FromEnv() Config {
 		WarmPoolImage:              getEnv("WARM_POOL_IMAGE", defaultWarmPoolImage),
 		WarmPoolMemoryMB:           getEnvInt64("WARM_POOL_MEMORY_MB", defaultWarmPoolMemory),
 		SnapshotRootDir:            getEnv("SNAPSHOT_ROOT_DIR", defaultSnapshotRootDir),
-		EventRetryMax:              getEnvInt("EVENT_RETRY_MAX", defaultEventRetryMax),
-		EventRetryInitialMS:        getEnvInt("EVENT_RETRY_INITIAL_MS", defaultEventRetryInit),
-		EventRetryMaxMS:            getEnvInt("EVENT_RETRY_MAX_MS", defaultEventRetryMaxMS),
-		EventQueueSize:             getEnvInt("EVENT_QUEUE_SIZE", defaultEventQueueSize),
+		ImagePullTimeoutSeconds:    getEnvInt("IMAGE_PULL_TIMEOUT_SECONDS", defaultImagePullTimeoutSeconds),
+		SandboxIdleTTLDays:         getEnvInt("SANDBOX_IDLE_TTL_DAYS", defaultSandboxIdleTTLDays),
+		OTELEndpoint:               getEnv("SERVER_OTEL_EXPORTER_OTLP_ENDPOINT", defaultOTELEndpoint),
 		CursorTokenSecret:          getEnv("CURSOR_TOKEN_SECRET", "dev-cursor-secret"),
 		CursorTokenTTLSeconds:      getEnvInt("CURSOR_TOKEN_TTL_SECONDS", defaultCursorTokenTTL),
 		ExecCleanupIntervalSeconds: getEnvInt("EXEC_CLEANUP_INTERVAL_SECONDS", defaultExecCleanupIntervalSeconds),

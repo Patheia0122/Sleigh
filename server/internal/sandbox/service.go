@@ -10,10 +10,13 @@ import (
 	"sync"
 	"time"
 
-	appErr "agent-heavyworks-runtime/server/internal/errors"
-	"agent-heavyworks-runtime/server/internal/id"
-	"agent-heavyworks-runtime/server/internal/notifier"
-	sqlitestore "agent-heavyworks-runtime/server/internal/store/sqlite"
+	appErr "sleigh-runtime/server/internal/errors"
+	"sleigh-runtime/server/internal/id"
+	"sleigh-runtime/server/internal/notifier"
+	sqlitestore "sleigh-runtime/server/internal/store/sqlite"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Service struct {
@@ -21,6 +24,7 @@ type Service struct {
 	store    *sqlitestore.Store
 	reporter notifier.Reporter
 	policy   Policy
+	tracer   trace.Tracer
 
 	mu      sync.RWMutex
 	execMap map[string]*execTask
@@ -44,6 +48,7 @@ type Policy struct {
 	SnapshotRootDir            string
 	CursorTokenSecret          string
 	CursorTokenTTLSeconds      int
+	SandboxIdleTTLDays         int
 }
 
 type ExecRequest struct {
@@ -70,6 +75,11 @@ type ExecHistoryPage struct {
 }
 
 type CleanupResult struct {
+	DeletedRows int64  `json:"deleted_rows"`
+	Before      string `json:"before"`
+}
+
+type IdleCleanupResult struct {
 	DeletedRows int64  `json:"deleted_rows"`
 	Before      string `json:"before"`
 }
@@ -101,12 +111,17 @@ func NewService(
 	store *sqlitestore.Store,
 	reporter notifier.Reporter,
 	policy Policy,
+	tracer trace.Tracer,
 ) *Service {
+	if tracer == nil {
+		tracer = trace.NewNoopTracerProvider().Tracer("sleigh.sandbox")
+	}
 	return &Service{
 		backend:  backend,
 		store:    store,
 		reporter: reporter,
 		policy:   policy,
+		tracer:   tracer,
 		execMap:  make(map[string]*execTask),
 	}
 }
@@ -119,27 +134,47 @@ func (s *Service) Kind() string {
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Metadata, error) {
+	startedAt := time.Now()
 	if s.backend == nil || s.store == nil {
 		return Metadata{}, fmt.Errorf("sandbox service not initialized")
 	}
+
+	ctx, span := s.tracer.Start(ctx, "sandbox.create")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("sandbox.request.image", strings.TrimSpace(req.Image)),
+		attribute.Int64("sandbox.request.memory_limit_mb", req.MemoryLimitMB),
+	)
 
 	image, memoryMB := s.normalizeCreateDefaults(req)
 	req.Image = image
 	req.MemoryLimitMB = memoryMB
 	sessionID := sessionIDFromLabels(req.Labels)
+	span.SetAttributes(
+		attribute.String("sandbox.image", req.Image),
+		attribute.Int64("sandbox.memory_limit_mb", req.MemoryLimitMB),
+		attribute.String("sandbox.session_id", sessionID),
+	)
 
 	meta, allocatedFromPool, err := s.allocateFromWarmPool(ctx, req, sessionID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return Metadata{}, err
 	}
+	span.SetAttributes(attribute.Bool("sandbox.from_warm_pool", allocatedFromPool))
 	if !allocatedFromPool {
 		sandboxID, idErr := id.New("sbx_")
 		if idErr != nil {
+			span.RecordError(idErr)
+			span.SetStatus(codes.Error, idErr.Error())
 			return Metadata{}, idErr
 		}
 		req.ID = sandboxID
 		meta, err = s.backend.Create(ctx, req)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return Metadata{}, err
 		}
 
@@ -159,7 +194,10 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Metadata, erro
 			Status:    meta.Status,
 			Labels:    meta.Labels,
 			Created:   meta.Created,
+			LastAccessed: meta.Created,
 		}); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return Metadata{}, err
 		}
 	}
@@ -170,6 +208,13 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Metadata, erro
 	}
 	s.emitSessionAggregate(context.Background(), sessionID, meta.ID, trigger, "info")
 	go s.ensureWarmPool(context.Background())
+	meta.StartupLatencyMS = time.Since(startedAt).Milliseconds()
+	span.SetAttributes(
+		attribute.String("sandbox.id", meta.ID),
+		attribute.String("sandbox.status", meta.Status),
+		attribute.Int64("sandbox.create_duration_ms", meta.StartupLatencyMS),
+	)
+	span.SetStatus(codes.Ok, "sandbox created")
 
 	return meta, nil
 }
@@ -254,6 +299,7 @@ func (s *Service) AuthorizeSandboxAccess(ctx context.Context, sessionID, sandbox
 	if strings.TrimSpace(record.SessionID) != sessionID {
 		return appErr.ErrForbidden
 	}
+	_ = s.store.UpdateSandboxLastAccess(ctx, sandboxID, time.Now().UTC().Format(time.RFC3339))
 	return nil
 }
 
@@ -1136,6 +1182,7 @@ func (s *Service) ensureWarmPool(ctx context.Context) error {
 			Status:    meta.Status,
 			Labels:    req.Labels,
 			Created:   meta.Created,
+			LastAccessed: meta.Created,
 		}); err != nil {
 			return err
 		}
@@ -1245,6 +1292,75 @@ func (s *Service) ensureSnapshotSafe(sandboxID string) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) CleanupIdleSandboxes(ctx context.Context) (IdleCleanupResult, error) {
+	ttlDays := s.policy.SandboxIdleTTLDays
+	if ttlDays <= 0 {
+		ttlDays = 14
+	}
+	beforeTime := time.Now().UTC().AddDate(0, 0, -ttlDays)
+	before := beforeTime.Format(time.RFC3339)
+
+	idle, err := s.store.ListIdleSandboxesBefore(ctx, before)
+	if err != nil {
+		return IdleCleanupResult{}, err
+	}
+	var deleted int64
+	for _, item := range idle {
+		if err := s.backend.Delete(ctx, item.ID); err != nil && !errors.Is(err, appErr.ErrNotFound) {
+			continue
+		}
+		if err := s.store.DeleteSandbox(ctx, item.ID); err != nil && !errors.Is(err, appErr.ErrNotFound) {
+			continue
+		}
+		deleted++
+	}
+	return IdleCleanupResult{
+		DeletedRows: deleted,
+		Before:      before,
+	}, nil
+}
+
+func (s *Service) StartIdleCleanupLoop(
+	ctx context.Context,
+	interval time.Duration,
+	onComplete func(IdleCleanupResult, error),
+) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+
+		run := func() {
+			runCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			result, err := s.CleanupIdleSandboxes(runCtx)
+			if onComplete != nil {
+				onComplete(result, err)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			run()
+		}
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
 }
 
 func isPathWithinRoot(targetPath, rootPath string) bool {

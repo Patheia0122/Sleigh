@@ -9,18 +9,19 @@ import (
 	"path/filepath"
 	"time"
 
-	appErr "agent-heavyworks-runtime/server/internal/errors"
+	appErr "sleigh-runtime/server/internal/errors"
 
 	_ "modernc.org/sqlite"
 )
 
 type SandboxRecord struct {
-	ID        string
-	SessionID string
-	Image     string
-	Status    string
-	Labels    map[string]string
-	Created   string
+	ID           string
+	SessionID    string
+	Image        string
+	Status       string
+	Labels       map[string]string
+	Created      string
+	LastAccessed string
 }
 
 type SnapshotRecord struct {
@@ -96,8 +97,8 @@ func (s *Store) CreateSandbox(ctx context.Context, record SandboxRecord) error {
 	}
 
 	const query = `
-INSERT INTO sandboxes (id, session_id, image, status, labels_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sandboxes (id, session_id, image, status, labels_json, created_at, updated_at, last_accessed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `
 	_, err = s.db.ExecContext(
 		ctx,
@@ -107,6 +108,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 		record.Image,
 		record.Status,
 		string(labels),
+		record.Created,
 		record.Created,
 		record.Created,
 	)
@@ -119,7 +121,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 
 func (s *Store) GetSandbox(ctx context.Context, id string) (SandboxRecord, error) {
 	const query = `
-SELECT id, session_id, image, status, labels_json, created_at
+SELECT id, session_id, image, status, labels_json, created_at, last_accessed_at
 FROM sandboxes
 WHERE id = ?
 `
@@ -136,6 +138,7 @@ WHERE id = ?
 		&record.Status,
 		&labelsJSON,
 		&record.Created,
+		&record.LastAccessed,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -320,7 +323,7 @@ ORDER BY created_at ASC
 
 func (s *Store) ListSandboxesBySession(ctx context.Context, sessionID string) ([]SandboxRecord, error) {
 	const query = `
-SELECT id, session_id, image, status, labels_json, created_at
+SELECT id, session_id, image, status, labels_json, created_at, last_accessed_at
 FROM sandboxes
 WHERE session_id = ?
 ORDER BY created_at ASC
@@ -344,6 +347,7 @@ ORDER BY created_at ASC
 			&record.Status,
 			&labelsJSON,
 			&record.Created,
+			&record.LastAccessed,
 		); err != nil {
 			return nil, fmt.Errorf("scan sandbox by session: %w", err)
 		}
@@ -430,6 +434,69 @@ WHERE image = ? AND memory_mb = ?
 		return 0, fmt.Errorf("count warm pool entries: %w", err)
 	}
 	return count, nil
+}
+
+func (s *Store) UpdateSandboxLastAccess(ctx context.Context, id, accessedAt string) error {
+	const query = `
+UPDATE sandboxes
+SET last_accessed_at = ?, updated_at = ?
+WHERE id = ?
+`
+	result, err := s.db.ExecContext(ctx, query, accessedAt, now(), id)
+	if err != nil {
+		return fmt.Errorf("update sandbox last access: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("last access rows affected: %w", err)
+	}
+	if rows == 0 {
+		return appErr.ErrNotFound
+	}
+	return nil
+}
+
+func (s *Store) ListIdleSandboxesBefore(ctx context.Context, before string) ([]SandboxRecord, error) {
+	const query = `
+SELECT id, session_id, image, status, labels_json, created_at, last_accessed_at
+FROM sandboxes
+WHERE session_id <> '' AND last_accessed_at <> '' AND last_accessed_at < ?
+ORDER BY last_accessed_at ASC
+`
+	rows, err := s.db.QueryContext(ctx, query, before)
+	if err != nil {
+		return nil, fmt.Errorf("query idle sandboxes: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]SandboxRecord, 0)
+	for rows.Next() {
+		var (
+			record     SandboxRecord
+			labelsJSON string
+		)
+		if err := rows.Scan(
+			&record.ID,
+			&record.SessionID,
+			&record.Image,
+			&record.Status,
+			&labelsJSON,
+			&record.Created,
+			&record.LastAccessed,
+		); err != nil {
+			return nil, fmt.Errorf("scan idle sandbox: %w", err)
+		}
+		if labelsJSON != "" {
+			if err := json.Unmarshal([]byte(labelsJSON), &record.Labels); err != nil {
+				return nil, fmt.Errorf("unmarshal idle sandbox labels: %w", err)
+			}
+		}
+		result = append(result, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate idle sandboxes: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Store) CreateSnapshot(ctx context.Context, snapshot SnapshotRecord) error {
@@ -865,7 +932,8 @@ CREATE TABLE IF NOT EXISTS sandboxes (
   status TEXT NOT NULL,
   labels_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  last_accessed_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -932,6 +1000,8 @@ ON exec_tasks(sandbox_id, started_at DESC, id DESC);
 	_, _ = db.ExecContext(ctx, `ALTER TABLE snapshots ADD COLUMN snapshot_type TEXT NOT NULL DEFAULT 'container'`)
 	_, _ = db.ExecContext(ctx, `ALTER TABLE snapshots ADD COLUMN source_host_path TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.ExecContext(ctx, `ALTER TABLE snapshots ADD COLUMN base_snapshot_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.ExecContext(ctx, `ALTER TABLE sandboxes ADD COLUMN last_accessed_at TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.ExecContext(ctx, `UPDATE sandboxes SET last_accessed_at = created_at WHERE last_accessed_at = ''`)
 	return nil
 }
 

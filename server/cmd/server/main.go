@@ -10,18 +10,18 @@ import (
 	"syscall"
 	"time"
 
-	"agent-heavyworks-runtime/server/internal/config"
-	serverhttp "agent-heavyworks-runtime/server/internal/http"
-	"agent-heavyworks-runtime/server/internal/monitor"
-	"agent-heavyworks-runtime/server/internal/notifier"
-	"agent-heavyworks-runtime/server/internal/sandbox"
-	dockerbackend "agent-heavyworks-runtime/server/internal/sandbox/docker"
-	sqlitestore "agent-heavyworks-runtime/server/internal/store/sqlite"
+	"sleigh-runtime/server/internal/config"
+	serverhttp "sleigh-runtime/server/internal/http"
+	"sleigh-runtime/server/internal/monitor"
+	"sleigh-runtime/server/internal/sandbox"
+	dockerbackend "sleigh-runtime/server/internal/sandbox/docker"
+	sqlitestore "sleigh-runtime/server/internal/store/sqlite"
+	"sleigh-runtime/server/internal/telemetry"
 )
 
 func main() {
 	cfg := config.FromEnv()
-	backend := dockerbackend.NewBackend()
+	backend := dockerbackend.NewBackend(cfg.ImagePullTimeoutSeconds)
 	store, err := sqlitestore.Open(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("init sqlite store failed: %v", err)
@@ -32,14 +32,24 @@ func main() {
 		}
 	}()
 
-	reporter := notifier.BuildReporter(cfg.SessionManagerEventURL, notifier.RetryOptions{
-		MaxRetries:     cfg.EventRetryMax,
-		InitialBackoff: time.Duration(cfg.EventRetryInitialMS) * time.Millisecond,
-		MaxBackoff:     time.Duration(cfg.EventRetryMaxMS) * time.Millisecond,
-		QueueSize:      cfg.EventQueueSize,
-	})
-	monitorService := monitor.NewService(reporter)
-	service := sandbox.NewService(backend, store, reporter, sandbox.Policy{
+	monitorService := monitor.NewService(nil)
+	tracer, shutdownOTEL, err := telemetry.InitOTEL(context.Background(), cfg.OTELEndpoint, cfg.Version)
+	if err != nil {
+		log.Fatalf("init otel failed: %v", err)
+	}
+	if shutdownOTEL != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownOTEL(ctx); err != nil {
+				log.Printf("shutdown otel failed: %v", err)
+			}
+		}()
+		log.Printf("otel tracing enabled: endpoint=%s", cfg.OTELEndpoint)
+	} else {
+		log.Printf("otel tracing disabled")
+	}
+	service := sandbox.NewService(backend, store, nil, sandbox.Policy{
 		MinExpandMB:                cfg.MinExpandMB,
 		MaxExpandMB:                cfg.MaxExpandMB,
 		MaxExpandStepMB:            cfg.MaxExpandStepMB,
@@ -52,7 +62,8 @@ func main() {
 		SnapshotRootDir:            cfg.SnapshotRootDir,
 		CursorTokenSecret:          cfg.CursorTokenSecret,
 		CursorTokenTTLSeconds:      cfg.CursorTokenTTLSeconds,
-	})
+		SandboxIdleTTLDays:         cfg.SandboxIdleTTLDays,
+	}, tracer)
 	if _, err := service.RefillWarmPool(context.Background()); err != nil {
 		log.Printf("warm pool refill on startup failed: %v", err)
 	}
@@ -78,6 +89,23 @@ func main() {
 				}
 				log.Printf(
 					"periodic exec cleanup completed: deleted_rows=%d before=%s",
+					result.DeletedRows,
+					result.Before,
+				)
+			},
+		)
+	}
+	if cfg.ExecCleanupIntervalSeconds > 0 {
+		service.StartIdleCleanupLoop(
+			ctx,
+			time.Duration(cfg.ExecCleanupIntervalSeconds)*time.Second,
+			func(result sandbox.IdleCleanupResult, err error) {
+				if err != nil {
+					log.Printf("periodic idle sandbox cleanup failed: %v", err)
+					return
+				}
+				log.Printf(
+					"periodic idle sandbox cleanup completed: deleted_rows=%d before=%s",
 					result.DeletedRows,
 					result.Before,
 				)

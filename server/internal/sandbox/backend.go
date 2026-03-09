@@ -3,12 +3,16 @@ package sandbox
 import "context"
 
 type Metadata struct {
-	ID            string            `json:"id"`
-	Image         string            `json:"image"`
-	Status        string            `json:"status"`
-	Labels        map[string]string `json:"labels,omitempty"`
-	Created       string            `json:"created"`
-	MemoryLimitMB int64             `json:"memory_limit_mb,omitempty"`
+	ID                  string            `json:"id"`
+	Image               string            `json:"image"`
+	Status              string            `json:"status"`
+	Labels              map[string]string `json:"labels,omitempty"`
+	Created             string            `json:"created"`
+	MemoryLimitMB       int64             `json:"memory_limit_mb,omitempty"`
+	StartupLatencyMS    int64             `json:"startup_latency_ms,omitempty"`
+	ImagePullTriggered  bool              `json:"image_pull_triggered,omitempty"`
+	ImagePullStatus     string            `json:"image_pull_status,omitempty"`
+	ImagePullDurationMS int64             `json:"image_pull_duration_ms,omitempty"`
 }
 
 type Snapshot struct {

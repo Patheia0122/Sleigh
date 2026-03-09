@@ -51,7 +51,6 @@ class SleighClient:
         except ValueError:
             return {"raw": response.text}
 
-    # Sandbox
     def create_sandbox(
         self,
         *,
@@ -59,6 +58,7 @@ class SleighClient:
         image: str = "alpine:3.20",
         labels: dict[str, str] | None = None,
         memory_limit_mb: int | None = None,
+        confirm_low_memory: bool | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "session_token": session_token,
@@ -68,6 +68,8 @@ class SleighClient:
             body["labels"] = labels
         if memory_limit_mb is not None:
             body["memory_limit_mb"] = memory_limit_mb
+        if confirm_low_memory is not None:
+            body["confirm_low_memory"] = confirm_low_memory
         return self._request("POST", "/sandboxes", json_body=body)
 
     def list_sandboxes(self, *, session_token: str) -> dict[str, Any]:
@@ -87,7 +89,6 @@ class SleighClient:
             query={"session_token": session_token},
         )
 
-    # Snapshots
     def create_snapshot(self, *, session_token: str, sandbox_id: str) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -111,14 +112,24 @@ class SleighClient:
             json_body={"session_token": session_token, "snapshot_id": snapshot_id},
         )
 
-    # Exec
     def exec_command(
-        self, *, session_token: str, sandbox_id: str, command: str
+        self,
+        *,
+        session_token: str,
+        sandbox_id: str,
+        command: str,
+        wait: bool | None = None,
+        wait_timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {"session_token": session_token, "command": command}
+        if wait is not None:
+            body["wait"] = wait
+        if wait_timeout_seconds is not None:
+            body["wait_timeout_seconds"] = wait_timeout_seconds
         return self._request(
             "POST",
             f"/sandboxes/{sandbox_id}/exec",
-            json_body={"session_token": session_token, "command": command},
+            json_body=body,
         )
 
     def get_exec(
@@ -139,7 +150,6 @@ class SleighClient:
             query={"session_token": session_token},
         )
 
-    # Mounts
     def list_mounts(self, *, session_token: str, sandbox_id: str) -> dict[str, Any]:
         return self._request(
             "GET",
@@ -176,7 +186,6 @@ class SleighClient:
             query={"session_token": session_token},
         )
 
-    # Memory
     def get_memory_pressure(
         self, *, session_token: str, sandbox_id: str
     ) -> dict[str, Any]:
@@ -195,7 +204,6 @@ class SleighClient:
             json_body={"session_token": session_token, "target_mb": target_mb},
         )
 
-    # Session history
     def list_session_exec_tasks(
         self,
         *,
@@ -213,3 +221,68 @@ class SleighClient:
                 "cursor": cursor,
             },
         )
+
+    def run_workflow(self, *, session_token: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/workflow/run",
+            json_body={"session_token": session_token, "steps": steps},
+        )
+
+    def read_sandbox(
+        self,
+        *,
+        session_token: str,
+        sandbox_id: str,
+        command: str,
+        args: list[str] | None = None,
+        cwd: str | None = None,
+        timeout_seconds: int | None = None,
+        max_output_bytes: int | None = None,
+        max_lines: int | None = None,
+        output_offset: int | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "session_token": session_token,
+            "command": command,
+        }
+        if args is not None:
+            body["args"] = args
+        if cwd is not None:
+            body["cwd"] = cwd
+        if timeout_seconds is not None:
+            body["timeout_seconds"] = timeout_seconds
+        if max_output_bytes is not None:
+            body["max_output_bytes"] = max_output_bytes
+        if max_lines is not None:
+            body["max_lines"] = max_lines
+        if output_offset is not None:
+            body["output_offset"] = output_offset
+        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/read", json_body=body)
+
+    def patch_workspace(
+        self,
+        *,
+        session_token: str,
+        sandbox_id: str,
+        cwd: str,
+        patch: str,
+        build_language: str | None = None,
+        timeout_seconds: int | None = None,
+        max_output_bytes: int | None = None,
+        max_lines: int | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "session_token": session_token,
+            "cwd": cwd,
+            "patch": patch,
+        }
+        if build_language is not None:
+            body["build_language"] = build_language
+        if timeout_seconds is not None:
+            body["timeout_seconds"] = timeout_seconds
+        if max_output_bytes is not None:
+            body["max_output_bytes"] = max_output_bytes
+        if max_lines is not None:
+            body["max_lines"] = max_lines
+        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/patch", json_body=body)

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"agent-heavyworks-runtime/server/internal/config"
+	"sleigh-runtime/server/internal/config"
 )
 
 func TestHealthzReturnsOK(t *testing.T) {

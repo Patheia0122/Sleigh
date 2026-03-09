@@ -8,7 +8,6 @@ services:
       SERVER_ADDR: ":8080"
       SERVER_VERSION: "dev"
       SERVER_DB_PATH: "/data/runtime.db"
-      SESSION_MANAGER_EVENTS_URL: ""
       MEMORY_EXPAND_MIN_MB: "64"
       MEMORY_EXPAND_MAX_MB: "4096"
       MEMORY_EXPAND_MAX_STEP_MB: "2048"
@@ -17,14 +16,10 @@ services:
       WARM_POOL_IMAGE: "alpine:3.20"
       WARM_POOL_MEMORY_MB: "256"
       SNAPSHOT_ROOT_DIR: "/data/snapshots"
-      EVENT_RETRY_MAX: "5"
-      EVENT_RETRY_INITIAL_MS: "500"
-      EVENT_RETRY_MAX_MS: "10000"
-      EVENT_QUEUE_SIZE: "1024"
       CURSOR_TOKEN_SECRET: "dev-cursor-secret"
       CURSOR_TOKEN_TTL_SECONDS: "3600"
       EXEC_CLEANUP_INTERVAL_SECONDS: "3600"
-      SERVER_MOUNT_ALLOWED_ROOT: "${SERVER_MOUNT_ALLOWED_ROOT:-/opt/agent-heavyworks-runtime/mount-root-default}"
+      SERVER_MOUNT_ALLOWED_ROOT: "${SERVER_MOUNT_ALLOWED_ROOT:-/opt/sleigh-runtime/mount-root-default}"
     ports:
       - "8080:8080"
     volumes:

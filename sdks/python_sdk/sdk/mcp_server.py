@@ -15,11 +15,17 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
     mcp = FastMCP("sleigh-runtime")
 
     @mcp.tool()
-    def create_sandbox(session_token: str, image: str = "alpine:3.20", memory_limit_mb: int | None = None):
+    def create_sandbox(
+        session_token: str,
+        image: str = "alpine:3.20",
+        memory_limit_mb: int | None = None,
+        confirm_low_memory: bool | None = None,
+    ):
         return client.create_sandbox(
             session_token=session_token,
             image=image,
             memory_limit_mb=memory_limit_mb,
+            confirm_low_memory=confirm_low_memory,
         )
 
     @mcp.tool()
@@ -35,8 +41,20 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.delete_sandbox(session_token=session_token, sandbox_id=sandbox_id)
 
     @mcp.tool()
-    def exec_command(session_token: str, sandbox_id: str, command: str):
-        return client.exec_command(session_token=session_token, sandbox_id=sandbox_id, command=command)
+    def exec_command(
+        session_token: str,
+        sandbox_id: str,
+        command: str,
+        wait: bool | None = None,
+        wait_timeout_seconds: int | None = None,
+    ):
+        return client.exec_command(
+            session_token=session_token,
+            sandbox_id=sandbox_id,
+            command=command,
+            wait=wait,
+            wait_timeout_seconds=wait_timeout_seconds,
+        )
 
     @mcp.tool()
     def get_exec(session_token: str, sandbox_id: str, exec_id: str):
@@ -79,6 +97,56 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             session_id=session_id,
             limit=limit,
             cursor=cursor,
+        )
+
+    @mcp.tool()
+    def run_workflow(session_token: str, steps: list[dict]):
+        return client.run_workflow(session_token=session_token, steps=steps)
+
+    @mcp.tool()
+    def read_sandbox(
+        session_token: str,
+        sandbox_id: str,
+        command: str,
+        args: list[str] | None = None,
+        cwd: str | None = None,
+        timeout_seconds: int | None = None,
+        max_output_bytes: int | None = None,
+        max_lines: int | None = None,
+        output_offset: int | None = None,
+    ):
+        return client.read_sandbox(
+            session_token=session_token,
+            sandbox_id=sandbox_id,
+            command=command,
+            args=args,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            max_lines=max_lines,
+            output_offset=output_offset,
+        )
+
+    @mcp.tool()
+    def patch_workspace(
+        session_token: str,
+        sandbox_id: str,
+        cwd: str,
+        patch: str,
+        build_language: str | None = None,
+        timeout_seconds: int | None = None,
+        max_output_bytes: int | None = None,
+        max_lines: int | None = None,
+    ):
+        return client.patch_workspace(
+            session_token=session_token,
+            sandbox_id=sandbox_id,
+            cwd=cwd,
+            patch=patch,
+            build_language=build_language,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            max_lines=max_lines,
         )
 
     return mcp

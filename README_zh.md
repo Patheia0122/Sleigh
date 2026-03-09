@@ -13,10 +13,14 @@ Sleigh 是面向 Agent 长周期、强状态、资源波动任务的弹性沙箱
 
 - 基于会话隔离沙箱可见性，避免跨会话越权访问
 - 提供命令执行、状态查询与取消能力
+- 支持 exec 同步等待模式（wait）
 - 支持快照与回滚，提高任务可恢复性
 - 提供内存压力观测与扩容控制接口
 - 支持带权限边界的宿主机目录挂载
-- 事件推送具备有限重试与退避
+- 支持单请求内的有序工作流批量执行
+- 支持沙箱内只读操作（命令白名单 + 截断分页）
+- 支持沙箱内AI编程的patch流水线（`git apply` + `pre-commit` + 可选 build）
+- 统一使用 OTEL 做运行时可观测
 - 执行历史支持游标分页与 TTL 自动清理
 
 ## 运行模型
@@ -63,22 +67,53 @@ docker compose up --build
 - `POST /sandboxes` 创建沙箱
 - `GET /sandboxes` 列出当前会话沙箱
 - `POST /sandboxes/{id}/exec` 执行命令
+- `POST /workflow/run` 按序执行多步骤工作流
 - `POST /sandboxes/{id}/snapshots` 创建快照
 - `POST /sandboxes/{id}/rollback` 回滚快照
 - `GET /sandboxes/{id}/memory/pressure` 查询内存压力
 - `POST /sandboxes/{id}/memory/expand` 请求扩容
+- `POST /sandboxes/{id}/ops/read` 沙箱读操作（同步，命令白名单）
+- `POST /sandboxes/{id}/ops/patch` 沙箱内AI编程 patch 操作（作用于其挂载工作区）
 - `GET /sessions/{sessionId}/exec-tasks` 执行历史分页
 
 受保护接口统一使用 `session_token`（请求体或 query）。
 
+读写类接口统一返回 AI 友好 envelope：
+
+- `status`, `duration_ms`, `timed_out`, `truncated`
+- `stdout`, `stderr`, `error`
+- 可选 `omitted_bytes`, `next_offset` 以及接口特定 artifacts
+
+## 关键运行配置
+
+通过 `install_server.sh` 交互配置并写入 `sleigh.env`。
+
+- `SERVER_ADDR` 服务监听地址
+- `SERVER_MOUNT_ALLOWED_ROOT` 挂载白名单根目录
+- `WARM_POOL_SIZE` / `WARM_POOL_IMAGE` / `WARM_POOL_MEMORY_MB`
+- `EXEC_TASK_TTL_DAYS` 与 `EXEC_CLEANUP_INTERVAL_SECONDS`
+- `SANDBOX_IDLE_TTL_DAYS` 空闲沙箱回收阈值（默认 `14` 天）
+- `SERVER_OTEL_EXPORTER_OTLP_ENDPOINT` 可选 OTLP gRPC 地址（留空关闭 OTEL）
+- `IMAGE_PULL_TIMEOUT_SECONDS` 沙箱创建时镜像拉取超时
+
+## 可观测与稳定性
+
+- `create_sandbox` 响应包含 `startup_latency_ms`
+- 创建响应包含镜像拉取观测字段：
+  - `image_pull_triggered`
+  - `image_pull_status`
+  - `image_pull_duration_ms`
+- 支持可选 OTLP gRPC OTEL 追踪（沙箱生命周期）
+- 定时空闲沙箱清理会回收超时会话沙箱并输出审计日志
+
 ## Python SDK
 
-仓库内置 Python SDK（`python_sdk/`），提供两种集成形态：
+仓库内置 Python SDK（`sdks/python_sdk/`），提供两种集成形态：
 
-- **LangChain Tool 适配**：`sleigh_sdk.SleighLangChainClient`
-- **MCP 适配**：`sleigh_sdk.run_stdio_server`
+- **LangChain Tool 适配**：`sdk.SleighLangChainClient`
+- **MCP 适配**：`sdk.run_stdio_server`
 
-具体安装与用法见 `python_sdk/README.md`。
+具体安装与用法见 `sdks/python_sdk/README.md`。
 
 ## 当前状态
 

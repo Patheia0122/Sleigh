@@ -2,7 +2,7 @@
 docs/dev-process/
 
 # Temporary/incomplete SDK examples
-python_sdk/examples/
+sdks/python_sdk/examples/
 
 # Go cache / module cache
 server/.gopath/
@@ -24,3 +24,6 @@ build/
 # Local runtime state
 runtime-data/
 server/data/
+
+# Local assistant change journal
+.local-change-log.md

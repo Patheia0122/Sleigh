@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"agent-heavyworks-runtime/server/internal/notifier"
+	"sleigh-runtime/server/internal/notifier"
 )
 
 type Service struct {

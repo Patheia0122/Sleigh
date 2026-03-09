@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -27,21 +27,48 @@ class SleighToolInput(BaseModel):
         "get_memory_pressure",
         "expand_memory",
         "list_session_exec_tasks",
+        "run_workflow",
+        "read_sandbox",
+        "patch_workspace",
     ] = Field(..., description="Runtime action name to execute.")
     sandbox_id: str | None = Field(None, description="Sandbox identifier.")
     snapshot_id: str | None = Field(None, description="Snapshot identifier.")
     exec_id: str | None = Field(None, description="Execution identifier.")
     mount_id: str | None = Field(None, description="Mount identifier.")
     command: str | None = Field(None, description="Command to execute in sandbox.")
+    wait: bool | None = Field(None, description="Wait for exec result synchronously.")
+    wait_timeout_seconds: int | None = Field(
+        None, ge=1, le=300, description="Max seconds to wait when wait=true (default 10)."
+    )
     image: str = Field("alpine:3.20", description="Container image when creating a sandbox.")
     host_path: str | None = Field(None, description="Host path to mount.")
     container_path: str | None = Field(None, description="Container mount path.")
     mode: str = Field("rw", description="Mount mode: rw or ro.")
     target_mb: int | None = Field(None, description="Target memory limit in MB.")
     memory_limit_mb: int | None = Field(None, description="Sandbox memory limit in MB.")
+    confirm_low_memory: bool | None = Field(
+        None,
+        description="Confirm sandbox create when host available memory ratio is between 5% and 8%.",
+    )
     session_id: str | None = Field(None, description="Session id for session history query.")
     limit: int = Field(20, ge=1, le=200, description="Pagination page size.")
     cursor: str | None = Field(None, description="Pagination cursor token.")
+    workflow_steps: list[dict[str, Any]] | None = Field(
+        None,
+        description="Ordered workflow steps for run_workflow.",
+    )
+    read_command: str | None = Field(None, description="Whitelisted sandbox read command.")
+    read_args: list[str] | None = Field(None, description="Arguments for read command.")
+    cwd: str | None = Field(None, description="Working directory for read command.")
+    timeout_seconds: int | None = Field(None, ge=1, le=300, description="Read operation timeout seconds.")
+    max_output_bytes: int | None = Field(None, ge=1, le=1048576, description="Max captured bytes per stream.")
+    max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
+    output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
+    patch_text: str | None = Field(None, description="Patch content for patch_workspace.")
+    build_language: str | None = Field(
+        None,
+        description="Optional build language for patch_workspace (e.g. go/python/node/rust/java).",
+    )
 
 
 class SleighLangChainClient:
@@ -57,6 +84,7 @@ class SleighLangChainClient:
                 session_token=token,
                 image=data.image,
                 memory_limit_mb=data.memory_limit_mb,
+                confirm_low_memory=data.confirm_low_memory,
             )
         if action == "list_sandboxes":
             return self.client.list_sandboxes(session_token=token)
@@ -79,6 +107,8 @@ class SleighLangChainClient:
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
                 command=_require(data.command, "command"),
+                wait=data.wait,
+                wait_timeout_seconds=data.wait_timeout_seconds,
             )
         if action == "get_exec":
             return self.client.get_exec(
@@ -125,6 +155,34 @@ class SleighLangChainClient:
                 limit=data.limit,
                 cursor=data.cursor,
             )
+        if action == "run_workflow":
+            return self.client.run_workflow(
+                session_token=token,
+                steps=_require(data.workflow_steps, "workflow_steps"),
+            )
+        if action == "read_sandbox":
+            return self.client.read_sandbox(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                command=_require(data.read_command, "read_command"),
+                args=data.read_args,
+                cwd=data.cwd,
+                timeout_seconds=data.timeout_seconds,
+                max_output_bytes=data.max_output_bytes,
+                max_lines=data.max_lines,
+                output_offset=data.output_offset,
+            )
+        if action == "patch_workspace":
+            return self.client.patch_workspace(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                cwd=_require(data.cwd, "cwd"),
+                patch=_require(data.patch_text, "patch_text"),
+                build_language=data.build_language,
+                timeout_seconds=data.timeout_seconds,
+                max_output_bytes=data.max_output_bytes,
+                max_lines=data.max_lines,
+            )
         raise ValueError(f"unsupported action: {action}")
 
     def as_langchain_tool(
@@ -135,7 +193,7 @@ class SleighLangChainClient:
         handle_tool_error: bool = True,
     ):
         try:
-            from langchain.tools import tool
+            from langchain_core.tools import StructuredTool
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(
                 "LangChain is not installed. Run: pip install 'sleigh-sdk[langchain]'"
@@ -148,14 +206,6 @@ class SleighLangChainClient:
                 "session_token is required for session-scoped access control."
             )
 
-        @tool(
-            args_schema=SleighToolInput,
-            name=name,
-            description=description,
-            return_direct=return_direct,
-            handle_tool_error=handle_tool_error,
-            coroutine=False,
-        )
         def runtime_tool(**kwargs) -> str:
             try:
                 payload = SleighToolInput(**kwargs)
@@ -164,7 +214,14 @@ class SleighLangChainClient:
             except Exception as exc:  # pragma: no cover
                 return f"sleigh sdk error: {exc}"
 
-        return runtime_tool
+        return StructuredTool.from_function(
+            func=runtime_tool,
+            name=name,
+            description=description,
+            args_schema=SleighToolInput,
+            return_direct=return_direct,
+            handle_tool_error=handle_tool_error,
+        )
 
 
 def _require(value, field_name: str):

@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	appErr "agent-heavyworks-runtime/server/internal/errors"
-	"agent-heavyworks-runtime/server/internal/sandbox"
+	appErr "sleigh-runtime/server/internal/errors"
+	"sleigh-runtime/server/internal/sandbox"
 )
 
 const (
@@ -25,10 +25,18 @@ const (
 	emergencyExpandFactor               = 2.0
 )
 
-type Backend struct{}
+type Backend struct {
+	imagePullTimeout time.Duration
+}
 
-func NewBackend() *Backend {
-	return &Backend{}
+func NewBackend(imagePullTimeoutSeconds int) *Backend {
+	timeout := time.Duration(imagePullTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
+	return &Backend{
+		imagePullTimeout: timeout,
+	}
 }
 
 func (b *Backend) Kind() string {
@@ -45,6 +53,21 @@ func (b *Backend) Create(ctx context.Context, req sandbox.CreateRequest) (sandbo
 		limitMB = defaultCreateMemoryLimitMB
 	}
 	container := containerName(req.ID)
+	pullTriggered := false
+	pullDurationMS := int64(0)
+
+	exists, err := b.imageExists(ctx, image)
+	if err != nil {
+		return sandbox.Metadata{}, err
+	}
+	if !exists {
+		pullTriggered = true
+		pullStarted := time.Now()
+		if err := b.pullImage(ctx, image); err != nil {
+			return sandbox.Metadata{}, err
+		}
+		pullDurationMS = time.Since(pullStarted).Milliseconds()
+	}
 
 	args := []string{"create", "--name", container}
 	args = append(args, "--memory", fmt.Sprintf("%dm", limitMB))
@@ -63,8 +86,44 @@ func (b *Backend) Create(ctx context.Context, req sandbox.CreateRequest) (sandbo
 	if err != nil {
 		return sandbox.Metadata{}, err
 	}
+	meta.ImagePullTriggered = pullTriggered
+	if pullTriggered {
+		meta.ImagePullStatus = "completed"
+		meta.ImagePullDurationMS = pullDurationMS
+	}
 
 	return meta, nil
+}
+
+func (b *Backend) imageExists(ctx context.Context, image string) (bool, error) {
+	_, err := dockerJSON(ctx, "image", "inspect", image)
+	if err == nil {
+		return true, nil
+	}
+	if strings.Contains(err.Error(), "No such image") {
+		return false, nil
+	}
+	return false, fmt.Errorf("inspect image %q failed: %w", image, err)
+}
+
+func (b *Backend) pullImage(ctx context.Context, image string) error {
+	pullCtx, cancel := context.WithTimeout(ctx, b.imagePullTimeout)
+	defer cancel()
+	if _, err := dockerJSON(pullCtx, "pull", image); err != nil {
+		if errors.Is(pullCtx.Err(), context.DeadlineExceeded) || strings.Contains(err.Error(), "context deadline exceeded") {
+			return fmt.Errorf(
+				"image pull timed out after %ds for %q; check server network connectivity or configure proxy (HTTP_PROXY/HTTPS_PROXY)",
+				int(b.imagePullTimeout/time.Second),
+				image,
+			)
+		}
+		return fmt.Errorf(
+			"image pull failed for %q: %w; check server network connectivity or configure proxy (HTTP_PROXY/HTTPS_PROXY)",
+			image,
+			err,
+		)
+	}
+	return nil
 }
 
 func (b *Backend) Get(ctx context.Context, id string) (sandbox.Metadata, error) {
