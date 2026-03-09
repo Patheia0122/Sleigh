@@ -31,27 +31,48 @@ and keep execution loops stable at scale.
 - **Session-scoped visibility** via `session_token`
 - **Workspace-first snapshot semantics** (with container fallback)
 
-## Install (Host Service Mode)
+## Install
 
-Run:
+| Component | Recommended command |
+| --- | --- |
+| Server (host service) | `./install_server.sh` |
+| Python client (base) | `pip install sleigh-sdk` |
+| Python client + LangChain | `pip install "sleigh-sdk[langchain]"` |
+| Python client + MCP | `pip install "sleigh-sdk[mcp]"` |
+
+### Install Server (Host Service Mode)
 
 ```bash
 ./install_server.sh
 ```
 
-The installer will:
+Installer behavior:
 
-- ask language at startup (English / Chinese)
-- configure mount allowlist root interactively
-- build server binary on host
-- install and start `systemd` service `sleigh.service`
+- prompts language (English / Chinese)
+- configures mount allowlist root interactively
+- builds server binary on host
+- installs and starts `systemd` service `sleigh.service`
 
-Useful commands after installation:
+Useful service checks:
 
 ```bash
 sudo systemctl status sleigh.service
 sudo journalctl -u sleigh.service -f
 ```
+
+### Install Python Client (pip)
+
+```bash
+pip install sleigh-sdk
+```
+
+Import path:
+
+```python
+from sdk import SleighClient
+```
+
+More usage details: `sdks/python_sdk/README.md`.
 
 ## Local Development
 
@@ -107,14 +128,11 @@ Configured through `install_server.sh` interactive prompts and written to `sleig
 - optional OTEL tracing over OTLP gRPC for sandbox lifecycle spans
 - periodic idle sandbox cleanup removes stale session sandboxes and writes audit logs
 
-## Python SDK
-
-Python SDK is located in `sdks/python_sdk/` and includes:
+## SDK Integrations
 
 - **LangChain Tool adapter**: `sdk.SleighLangChainClient`
 - **MCP adapter**: `sdk.run_stdio_server`
-
-See `sdks/python_sdk/README.md` for installation and usage details.
+- docs: `sdks/python_sdk/README.md`
 
 ## Status
 

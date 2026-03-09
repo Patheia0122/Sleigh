@@ -30,9 +30,16 @@ Sleigh 是面向 Agent 长周期、强状态、资源波动任务的弹性沙箱
 - **会话级访问隔离** 通过 `session_token`
 - **快照语义优先工作目录**（必要时容器兜底）
 
-## 安装（宿主机服务模式）
+## 安装
 
-执行：
+| 组件 | 推荐命令 |
+| --- | --- |
+| 服务端（宿主机服务） | `./install_server.sh` |
+| Python 客户端（基础） | `pip install sleigh-sdk` |
+| Python 客户端 + LangChain | `pip install "sleigh-sdk[langchain]"` |
+| Python 客户端 + MCP | `pip install "sleigh-sdk[mcp]"` |
+
+### 安装服务端（宿主机服务模式）
 
 ```bash
 ./install_server.sh
@@ -51,6 +58,20 @@ Sleigh 是面向 Agent 长周期、强状态、资源波动任务的弹性沙箱
 sudo systemctl status sleigh.service
 sudo journalctl -u sleigh.service -f
 ```
+
+### 安装 Python 客户端（pip）
+
+```bash
+pip install sleigh-sdk
+```
+
+导入方式：
+
+```python
+from sdk import SleighClient
+```
+
+更多说明见：`sdks/python_sdk/README.md`。
 
 ## 本地开发模式
 
@@ -106,14 +127,11 @@ docker compose up --build
 - 支持可选 OTLP gRPC OTEL 追踪（沙箱生命周期）
 - 定时空闲沙箱清理会回收超时会话沙箱并输出审计日志
 
-## Python SDK
-
-仓库内置 Python SDK（`sdks/python_sdk/`），提供两种集成形态：
+## SDK 集成
 
 - **LangChain Tool 适配**：`sdk.SleighLangChainClient`
 - **MCP 适配**：`sdk.run_stdio_server`
-
-具体安装与用法见 `sdks/python_sdk/README.md`。
+- 文档：`sdks/python_sdk/README.md`
 
 ## 当前状态
 
