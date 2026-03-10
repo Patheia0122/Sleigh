@@ -24,7 +24,7 @@ def _import_sleigh_modules():
 
     # Fallback: add local SDK directory to sys.path.
     project_root = Path(__file__).resolve().parents[1]
-    sdk_root = project_root / "sdks" / "python_sdk" / "sdk"
+    sdk_root = project_root / "sdks" / "python_sdk" / "sdk" / "src"
     if sdk_root.exists():
         sdk_path = str(sdk_root)
         if sdk_path not in sys.path:
