@@ -23,6 +23,7 @@ class SleighClient:
         *,
         query: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
+        timeout_seconds: float | None = None,
     ) -> Any:
         url = urljoin(self.base_url.rstrip("/") + "/", path.lstrip("/"))
         response = requests.request(
@@ -30,7 +31,7 @@ class SleighClient:
             url=url,
             params={k: v for k, v in (query or {}).items() if v is not None},
             json=json_body,
-            timeout=self.timeout_seconds,
+            timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
         )
 
         if response.status_code >= 400:
@@ -59,6 +60,7 @@ class SleighClient:
         labels: dict[str, str] | None = None,
         memory_limit_mb: int | None = None,
         confirm_low_memory: bool | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "session_token": session_token,
@@ -70,7 +72,15 @@ class SleighClient:
             body["memory_limit_mb"] = memory_limit_mb
         if confirm_low_memory is not None:
             body["confirm_low_memory"] = confirm_low_memory
-        return self._request("POST", "/sandboxes", json_body=body)
+        timeout_seconds = request_timeout_seconds
+        if timeout_seconds is None:
+            timeout_seconds = max(self.timeout_seconds, 180.0)
+        return self._request(
+            "POST",
+            "/sandboxes",
+            json_body=body,
+            timeout_seconds=timeout_seconds,
+        )
 
     def list_sandboxes(self, *, session_token: str) -> dict[str, Any]:
         return self._request("GET", "/sandboxes", query={"session_token": session_token})
@@ -267,7 +277,7 @@ class SleighClient:
         *,
         session_token: str,
         sandbox_id: str,
-        workspace_path: str,
+        sandbox_path: str,
         patch: str,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
@@ -276,7 +286,7 @@ class SleighClient:
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "session_token": session_token,
-            "workspace_path": workspace_path,
+            "sandbox_path": sandbox_path,
             "patch": patch,
         }
         if build_language is not None:

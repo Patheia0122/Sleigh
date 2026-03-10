@@ -53,6 +53,12 @@ class SleighToolInput(BaseModel):
         None,
         description="Confirm sandbox create when host available memory ratio is between 5% and 8%.",
     )
+    request_timeout_seconds: float | None = Field(
+        None,
+        ge=1,
+        le=3600,
+        description="Optional HTTP timeout override for create_sandbox.",
+    )
     session_id: str | None = Field(None, description="Session id for session history query.")
     limit: int = Field(20, ge=1, le=200, description="Pagination page size.")
     cursor: str | None = Field(None, description="Pagination cursor token.")
@@ -68,6 +74,10 @@ class SleighToolInput(BaseModel):
     max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
     patch_text: str | None = Field(None, description="Patch content for patch_workspace.")
+    sandbox_path: str | None = Field(
+        None,
+        description="Absolute target directory path inside sandbox for patch_workspace.",
+    )
     build_language: str | None = Field(
         None,
         description="Optional build language for patch_workspace (e.g. go/python/node/rust/java).",
@@ -88,6 +98,7 @@ class SleighLangChainClient:
                 image=data.image,
                 memory_limit_mb=data.memory_limit_mb,
                 confirm_low_memory=data.confirm_low_memory,
+                request_timeout_seconds=data.request_timeout_seconds,
             )
         if action == "list_sandboxes":
             return self.client.list_sandboxes(session_token=token)
@@ -179,7 +190,7 @@ class SleighLangChainClient:
             return self.client.patch_workspace(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
-                workspace_path=_require(data.workspace_path, "workspace_path"),
+                sandbox_path=_require(data.sandbox_path, "sandbox_path"),
                 patch=_require(data.patch_text, "patch_text"),
                 build_language=data.build_language,
                 timeout_seconds=data.timeout_seconds,

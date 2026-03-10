@@ -98,7 +98,9 @@ docker compose up --build
 - `POST /sandboxes/{id}/ops/patch` sandbox-scoped patch pipeline (mounted workspace)
 - `GET /sessions/{sessionId}/exec-tasks` paginated history
 
-For mount/patch style write operations, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally.
+For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally.  
+For patch writes, client input uses `sandbox_path` (absolute path inside sandbox), and the server performs host-side patch by exporting/syncing that sandbox directory.
+Patch quality checks run `pre-commit` when `.pre-commit-config.yaml` exists; otherwise language-detected fallback checks are executed.
 
 All protected endpoints require `session_token` (body or query).
 

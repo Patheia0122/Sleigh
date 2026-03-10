@@ -20,12 +20,14 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         image: str = "alpine:3.20",
         memory_limit_mb: int | None = None,
         confirm_low_memory: bool | None = None,
+        request_timeout_seconds: float | None = None,
     ):
         return client.create_sandbox(
             session_token=session_token,
             image=image,
             memory_limit_mb=memory_limit_mb,
             confirm_low_memory=confirm_low_memory,
+            request_timeout_seconds=request_timeout_seconds,
         )
 
     @mcp.tool()
@@ -131,7 +133,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
     def patch_workspace(
         session_token: str,
         sandbox_id: str,
-        workspace_path: str,
+        sandbox_path: str,
         patch: str,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
@@ -141,7 +143,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.patch_workspace(
             session_token=session_token,
             sandbox_id=sandbox_id,
-            workspace_path=workspace_path,
+            sandbox_path=sandbox_path,
             patch=patch,
             build_language=build_language,
             timeout_seconds=timeout_seconds,

@@ -97,7 +97,9 @@ docker compose up --build
 - `POST /sandboxes/{id}/ops/patch` 沙箱内AI编程 patch 操作（作用于其挂载工作区）
 - `GET /sessions/{sessionId}/exec-tasks` 执行历史分页
 
-对挂载/patch 这类写操作，客户端统一传 `workspace_path`（相对 `SERVER_MOUNT_ALLOWED_ROOT`，允许带前导 `/`），服务端会在内部解析为宿主机绝对路径。
+挂载写操作使用 `workspace_path`（相对 `SERVER_MOUNT_ALLOWED_ROOT`，允许带前导 `/`），服务端会在内部解析为宿主机绝对路径。  
+patch 写操作使用 `sandbox_path`（沙箱内绝对路径），服务端会将该目录导出到宿主机临时区执行 patch 后再同步回沙箱。
+patch 质量检查策略：有 `.pre-commit-config.yaml` 时跑 `pre-commit`，否则自动检测语言执行兜底检查。
 
 受保护接口统一使用 `session_token`（请求体或 query）。
 

@@ -78,14 +78,16 @@ print(read_result)
 `patch_workspace` targets:
 
 - `POST /sandboxes/{id}/ops/patch`
-- validates sandbox auth + mounted workspace path ownership
-- `workspace_path` is required and is resolved under `SERVER_MOUNT_ALLOWED_ROOT`
+- validates sandbox auth and targets directory inside sandbox filesystem
+- `sandbox_path` is required and must be an absolute directory path in sandbox
+- service exports sandbox dir to host temp workspace, applies patch, and syncs back
+- quality checks: run `pre-commit` when config exists; otherwise auto-detect language for fallback checks
 
 ```python
 result = client.patch_workspace(
     session_token=session_token,
     sandbox_id=sandbox_id,
-    workspace_path="/test",
+    sandbox_path="/app",
     patch="*** Begin Patch\n*** End Patch\n",
 )
 ```
@@ -104,6 +106,7 @@ created = client.create_sandbox(
     session_token=session_token,
     image="alpine:3.20",
     confirm_low_memory=True,
+    request_timeout_seconds=180,
 )
 ```
 

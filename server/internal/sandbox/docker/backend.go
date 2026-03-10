@@ -186,7 +186,7 @@ func (b *Backend) UpdateMounts(ctx context.Context, sandboxID string, mounts []s
 
 	wasRunning := inspected.State.Status == "running"
 	tmpImage := fmt.Sprintf("hwr-rebuild:%s-%d", sandboxID, time.Now().UnixNano())
-	if _, err := dockerJSON(ctx, "commit", container, tmpImage); err != nil {
+	if _, err := dockerCommitWithRetry(ctx, container, tmpImage); err != nil {
 		return fmt.Errorf("commit before mount update: %w", err)
 	}
 	if _, err := dockerJSON(ctx, "rm", "-f", container); err != nil {
@@ -401,7 +401,7 @@ func (b *Backend) CreateSnapshot(ctx context.Context, sandboxID string, snapshot
 		return err
 	}
 
-	_, err := dockerJSON(ctx, "commit", container, snapshot.ImageRef)
+	_, err := dockerCommitWithRetry(ctx, container, snapshot.ImageRef)
 	if err != nil {
 		return err
 	}
@@ -469,6 +469,45 @@ func dockerRun(ctx context.Context, args ...string) (sandbox.ExecOutput, error) 
 
 	result.ExitCode = 0
 	return result, nil
+}
+
+func dockerCommitWithRetry(ctx context.Context, container, imageRef string) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		out, err := dockerJSON(ctx, "commit", container, imageRef)
+		if err == nil {
+			return out, nil
+		}
+		lastErr = err
+		if !isDockerCommitConflict(err) {
+			break
+		}
+		if err := waitWithContext(ctx, time.Duration(150*(attempt+1))*time.Millisecond); err != nil {
+			return "", err
+		}
+	}
+	return "", lastErr
+}
+
+func isDockerCommitConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "cannot commit container which is being removed") ||
+		strings.Contains(msg, "removal of container") ||
+		strings.Contains(msg, "is already in progress")
+}
+
+func waitWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func isDockerNotFoundError(err error) bool {

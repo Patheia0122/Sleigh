@@ -93,7 +93,7 @@ type readOpResponse struct {
 
 type patchOpRequest struct {
 	SessionToken   string `json:"session_token"`
-	WorkspacePath  string `json:"workspace_path"`
+	SandboxPath    string `json:"sandbox_path"`
 	Patch          string `json:"patch"`
 	BuildLanguage  string `json:"build_language,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
@@ -859,29 +859,13 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	cwd, err := resolveWorkspacePath(r.config.MountAllowedRoot, body.WorkspacePath)
+	sandboxPath, err := normalizeSandboxPatchPath(body.SandboxPath)
 	if err != nil {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
-	if info, err := os.Stat(cwd); err != nil {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("cwd does not exist"))
-		return
-	} else if !info.IsDir() {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("cwd must be a directory"))
-		return
-	}
 	if strings.TrimSpace(body.Patch) == "" {
 		writeError(w, stdhttp.StatusBadRequest, errors.New("patch is required"))
-		return
-	}
-	mounts, err := r.service.ListMounts(req.Context(), sandboxID)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	if !isPathWithinAnyMount(cwd, mounts) {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("cwd is outside sandbox mounted host paths"))
 		return
 	}
 
@@ -901,6 +885,18 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(req.Context(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
+	workDir, err := os.MkdirTemp("", "sleigh-sbx-patch-*")
+	if err != nil {
+		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create temp workspace: %w", err))
+		return
+	}
+	defer os.RemoveAll(workDir)
+
+	cwd := filepath.Join(workDir, "workspace")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("prepare temp workspace: %w", err))
+		return
+	}
 
 	tmpFile, err := os.CreateTemp("", "sleigh-patch-*.diff")
 	if err != nil {
@@ -915,6 +911,41 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 	_ = tmpFile.Close()
+
+	ensureOut, ensureErr := ensureSandboxDirectory(runCtx, sandboxID, sandboxPath)
+	if ensureErr != nil {
+		stdout, omittedOut, truncOut := applyOutputLimits(ensureOut.stdout, maxOutputBytes, maxLines)
+		stderr, omittedErr, truncErr := applyOutputLimits(ensureOut.stderr, maxOutputBytes, maxLines)
+		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+			Status:       "error",
+			DurationMS:   time.Since(started).Milliseconds(),
+			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
+			Truncated:    truncOut || truncErr,
+			Stdout:       stdout,
+			Stderr:       stderr,
+			Error:        "ensure sandbox path failed",
+			BuildStatus:  "not_run",
+			OmittedBytes: omittedOut + omittedErr,
+		})
+		return
+	}
+	copyOut, copyErr := copySandboxDirectoryToHost(runCtx, sandboxID, sandboxPath, cwd)
+	if copyErr != nil {
+		stdout, omittedOut, truncOut := applyOutputLimits(copyOut.stdout, maxOutputBytes, maxLines)
+		stderr, omittedErr, truncErr := applyOutputLimits(copyOut.stderr, maxOutputBytes, maxLines)
+		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+			Status:       "error",
+			DurationMS:   time.Since(started).Milliseconds(),
+			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
+			Truncated:    truncOut || truncErr,
+			Stdout:       stdout,
+			Stderr:       stderr,
+			Error:        "copy sandbox directory to host failed",
+			BuildStatus:  "not_run",
+			OmittedBytes: omittedOut + omittedErr,
+		})
+		return
+	}
 
 	checkOut, checkErr := runGitApplyCommand(runCtx, cwd, "apply", "--check", tmpPath)
 	if checkErr != nil {
@@ -965,13 +996,40 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeJSON(w, stdhttp.StatusOK, resp)
 		return
 	}
-
-	preOutput, preErr := runPreCommit(runCtx, cwd, appliedFiles)
-	resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(preOutput.stderr, preOutput.stdout, 30)
-	if preErr != nil {
+	syncOut, syncErr := copyHostDirectoryToSandbox(runCtx, sandboxID, sandboxPath, cwd)
+	if syncErr != nil {
 		resp.Status = "error"
-		resp.Error = "pre-commit checks failed; fix issues and retry"
-		resp.BuildStatus = "not_run"
+		resp.Error = "copy patched files back to sandbox failed"
+		combinedStdout := checkOut.stdout + applyOut.stdout + syncOut.stdout
+		combinedStderr := checkOut.stderr + applyOut.stderr + syncOut.stderr
+		stdout, omittedOut, truncOut := applyOutputLimits(combinedStdout, maxOutputBytes, maxLines)
+		stderr, omittedErr, truncErr := applyOutputLimits(combinedStderr, maxOutputBytes, maxLines)
+		resp.Stdout = stdout
+		resp.Stderr = stderr
+		resp.Truncated = truncOut || truncErr
+		resp.OmittedBytes = omittedOut + omittedErr
+		writeJSON(w, stdhttp.StatusOK, resp)
+		return
+	}
+
+	qualityOutput := commandOutput{}
+	qualityErr := error(nil)
+	if hasPreCommitConfig(cwd) {
+		qualityOutput, qualityErr = runPreCommit(runCtx, cwd, appliedFiles)
+		resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
+		if qualityErr != nil {
+			resp.Status = "error"
+			resp.Error = "pre-commit checks failed; fix issues and retry"
+			resp.BuildStatus = "not_run"
+		}
+	} else if detectedLanguage := detectWorkspaceLanguage(cwd, appliedFiles); detectedLanguage != "" {
+		qualityOutput, qualityErr = runLanguageQualityChecks(runCtx, cwd, detectedLanguage)
+		resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
+		if qualityErr != nil {
+			resp.Status = "error"
+			resp.Error = fmt.Sprintf("language quality checks failed for %q", detectedLanguage)
+			resp.BuildStatus = "not_run"
+		}
 	}
 
 	buildOutput := commandOutput{}
@@ -992,8 +1050,8 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		}
 	}
 
-	combinedStdout := checkOut.stdout + applyOut.stdout + preOutput.stdout + buildOutput.stdout
-	combinedStderr := checkOut.stderr + applyOut.stderr + preOutput.stderr + buildOutput.stderr
+	combinedStdout := ensureOut.stdout + copyOut.stdout + checkOut.stdout + applyOut.stdout + syncOut.stdout + qualityOutput.stdout + buildOutput.stdout
+	combinedStderr := ensureOut.stderr + copyOut.stderr + checkOut.stderr + applyOut.stderr + syncOut.stderr + qualityOutput.stderr + buildOutput.stderr
 	stdout, omittedOut, truncOut = applyOutputLimits(combinedStdout, maxOutputBytes, maxLines)
 	stderr, omittedErr, truncErr = applyOutputLimits(combinedStderr, maxOutputBytes, maxLines)
 	resp.Stdout = stdout
@@ -1434,6 +1492,184 @@ func runCommand(ctx context.Context, cwd string, command string, args ...string)
 
 func runGitApplyCommand(ctx context.Context, cwd string, args ...string) (commandOutput, error) {
 	return runCommand(ctx, "", "git", append([]string{"-C", cwd}, args...)...)
+}
+
+func normalizeSandboxPatchPath(raw string) (string, error) {
+	path := filepath.Clean(strings.TrimSpace(raw))
+	if path == "." || path == "" {
+		return "", errors.New("sandbox_path is required")
+	}
+	if !filepath.IsAbs(path) {
+		return "", errors.New("sandbox_path must be an absolute path inside sandbox")
+	}
+	if path == "/" {
+		return "", errors.New("sandbox_path cannot be root")
+	}
+	if strings.HasPrefix(path, "/proc") || strings.HasPrefix(path, "/sys") || strings.HasPrefix(path, "/dev") {
+		return "", errors.New("sandbox_path is not writable target")
+	}
+	return path, nil
+}
+
+func sandboxContainerName(sandboxID string) string {
+	return "hwr-sbx-" + strings.TrimSpace(sandboxID)
+}
+
+func ensureSandboxDirectory(ctx context.Context, sandboxID, sandboxPath string) (commandOutput, error) {
+	container := sandboxContainerName(sandboxID)
+	return runCommand(
+		ctx,
+		"",
+		"docker",
+		"exec",
+		container,
+		"sh",
+		"-lc",
+		"mkdir -p "+shQuote(sandboxPath),
+	)
+}
+
+func copySandboxDirectoryToHost(ctx context.Context, sandboxID, sandboxPath, hostDir string) (commandOutput, error) {
+	container := sandboxContainerName(sandboxID)
+	return runCommand(
+		ctx,
+		"",
+		"docker",
+		"cp",
+		fmt.Sprintf("%s:%s/.", container, sandboxPath),
+		hostDir,
+	)
+}
+
+func copyHostDirectoryToSandbox(ctx context.Context, sandboxID, sandboxPath, hostDir string) (commandOutput, error) {
+	container := sandboxContainerName(sandboxID)
+	return runCommand(
+		ctx,
+		"",
+		"docker",
+		"cp",
+		hostDir+"/.",
+		fmt.Sprintf("%s:%s", container, sandboxPath),
+	)
+}
+
+func hasPreCommitConfig(cwd string) bool {
+	info, err := os.Stat(filepath.Join(cwd, ".pre-commit-config.yaml"))
+	return err == nil && !info.IsDir()
+}
+
+func detectWorkspaceLanguage(cwd string, files []string) string {
+	byExt := make(map[string]int)
+	for _, file := range files {
+		ext := strings.ToLower(filepath.Ext(strings.TrimSpace(file)))
+		if ext != "" {
+			byExt[ext]++
+		}
+	}
+	score := map[string]int{
+		"python": byExt[".py"],
+		"go":     byExt[".go"],
+		"node":   byExt[".js"] + byExt[".jsx"] + byExt[".ts"] + byExt[".tsx"],
+		"rust":   byExt[".rs"],
+		"java":   byExt[".java"],
+	}
+	if fileExists(filepath.Join(cwd, "pyproject.toml")) || fileExists(filepath.Join(cwd, "requirements.txt")) {
+		score["python"] += 3
+	}
+	if fileExists(filepath.Join(cwd, "go.mod")) {
+		score["go"] += 3
+	}
+	if fileExists(filepath.Join(cwd, "package.json")) {
+		score["node"] += 3
+	}
+	if fileExists(filepath.Join(cwd, "Cargo.toml")) {
+		score["rust"] += 3
+	}
+	if fileExists(filepath.Join(cwd, "pom.xml")) || fileExists(filepath.Join(cwd, "build.gradle")) || fileExists(filepath.Join(cwd, "build.gradle.kts")) {
+		score["java"] += 3
+	}
+
+	bestLang := ""
+	bestScore := 0
+	for lang, val := range score {
+		if val > bestScore {
+			bestScore = val
+			bestLang = lang
+		}
+	}
+	if bestScore == 0 {
+		return ""
+	}
+	return bestLang
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+type qualityProfile struct {
+	image   string
+	command string
+}
+
+func resolveQualityProfile(language string) (qualityProfile, bool) {
+	switch strings.ToLower(strings.TrimSpace(language)) {
+	case "python", "py":
+		return qualityProfile{
+			image:   "python:3.12",
+			command: "python -m compileall -q .",
+		}, true
+	case "go", "golang":
+		return qualityProfile{
+			image: "golang:1.26",
+			command: "gofmt_out=$(gofmt -l .); " +
+				"if [ -n \"$gofmt_out\" ]; then echo \"$gofmt_out\"; exit 1; fi",
+		}, true
+	case "node", "javascript", "js", "typescript", "ts":
+		return qualityProfile{
+			image: "node:20",
+			command: "if [ -f package.json ]; then " +
+				"npm -s run lint --if-present && npm -s run format:check --if-present; " +
+				"else echo 'package.json not found, skip node quality checks'; fi",
+		}, true
+	case "rust":
+		return qualityProfile{
+			image:   "rust:1.80",
+			command: "if [ -f Cargo.toml ]; then cargo fmt --check; else echo 'Cargo.toml not found, skip rust quality checks'; fi",
+		}, true
+	case "java":
+		return qualityProfile{
+			image: "maven:3.9-eclipse-temurin-17",
+			command: "if [ -f pom.xml ]; then mvn -q -DskipTests verify; " +
+				"else echo 'pom.xml not found, skip java quality checks'; fi",
+		}, true
+	default:
+		return qualityProfile{}, false
+	}
+}
+
+func runLanguageQualityChecks(ctx context.Context, cwd string, language string) (commandOutput, error) {
+	profile, ok := resolveQualityProfile(language)
+	if !ok {
+		return commandOutput{}, nil
+	}
+	_, _ = runCommand(ctx, "", "docker", "pull", profile.image)
+	return runCommand(
+		ctx,
+		"",
+		"docker",
+		"run",
+		"--rm",
+		"-v",
+		cwd+":/workspace",
+		"-w",
+		"/workspace",
+		profile.image,
+		"sh",
+		"-lc",
+		profile.command,
+	)
 }
 
 func runPreCommit(ctx context.Context, cwd string, files []string) (commandOutput, error) {
