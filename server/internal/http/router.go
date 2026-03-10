@@ -297,6 +297,15 @@ func (r *Router) listSandboxes(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	if len(items) == 0 {
+		select {
+		case <-req.Context().Done():
+		case <-time.After(120 * time.Millisecond):
+			if retryItems, retryErr := r.service.ListBySession(req.Context(), sessionID); retryErr == nil {
+				items = retryItems
+			}
+		}
+	}
 	writeJSON(w, stdhttp.StatusOK, map[string]any{"items": items})
 }
 
@@ -395,6 +404,15 @@ func (r *Router) listSnapshots(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	if len(snapshots) == 0 {
+		select {
+		case <-req.Context().Done():
+		case <-time.After(120 * time.Millisecond):
+			if retryItems, retryErr := r.service.ListSnapshots(req.Context(), sandboxID); retryErr == nil {
+				snapshots = retryItems
+			}
+		}
+	}
 
 	writeJSON(w, stdhttp.StatusOK, map[string]any{
 		"items": snapshots,
@@ -425,6 +443,21 @@ func (r *Router) rollbackSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request)
 
 	meta, err := r.service.Rollback(req.Context(), sandboxID, body.SnapshotID)
 	if err != nil {
+		if errors.Is(err, appErr.ErrNotFound) {
+			snapshots, listErr := r.service.ListSnapshots(req.Context(), sandboxID)
+			if listErr == nil {
+				candidates := make([]string, 0, len(snapshots))
+				for _, item := range snapshots {
+					candidates = append(candidates, item.ID)
+				}
+				writeError(
+					w,
+					stdhttp.StatusNotFound,
+					fmt.Errorf("snapshot not found: %s; available snapshot ids: %s", body.SnapshotID, strings.Join(candidates, ", ")),
+				)
+				return
+			}
+		}
 		writeDomainError(w, err)
 		return
 	}
@@ -503,7 +536,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 
 	for idx, step := range body.Steps {
 		started := time.Now()
-		action := strings.TrimSpace(step.Action)
+		action := normalizeWorkflowAction(strings.TrimSpace(step.Action))
 		item := workflowStepResult{
 			Index:  idx,
 			Action: action,
@@ -544,7 +577,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 				sandboxID = currentSandboxID
 			}
 			if sandboxID == "" {
-				markFailed(appErr.ErrBadRequest)
+				markFailed(errors.New("workflow step requires sandbox_id or a previously created sandbox"))
 				break
 			}
 			if err := r.service.AuthorizeSandboxAccess(req.Context(), sessionID, sandboxID); err != nil {
@@ -553,7 +586,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			}
 			command := strings.TrimSpace(step.Command)
 			if command == "" {
-				markFailed(appErr.ErrBadRequest)
+				markFailed(errors.New("workflow exec_command step requires non-empty command"))
 				break
 			}
 			execResult, err := r.service.Execute(req.Context(), sandboxID, sandbox.ExecRequest{Command: command})
@@ -602,7 +635,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 				sandboxID = currentSandboxID
 			}
 			if sandboxID == "" {
-				markFailed(appErr.ErrBadRequest)
+				markFailed(errors.New("workflow create_snapshot step requires sandbox_id or a previously created sandbox"))
 				break
 			}
 			if err := r.service.AuthorizeSandboxAccess(req.Context(), sessionID, sandboxID); err != nil {
@@ -624,7 +657,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 				sandboxID = currentSandboxID
 			}
 			if sandboxID == "" || strings.TrimSpace(step.SnapshotID) == "" {
-				markFailed(appErr.ErrBadRequest)
+				markFailed(errors.New("workflow rollback_snapshot step requires sandbox_id and snapshot_id"))
 				break
 			}
 			if err := r.service.AuthorizeSandboxAccess(req.Context(), sessionID, sandboxID); err != nil {
@@ -646,7 +679,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 				sandboxID = currentSandboxID
 			}
 			if sandboxID == "" {
-				markFailed(appErr.ErrBadRequest)
+				markFailed(errors.New("workflow delete_sandbox step requires sandbox_id or a previously created sandbox"))
 				break
 			}
 			if err := r.service.AuthorizeSandboxAccess(req.Context(), sessionID, sandboxID); err != nil {
@@ -664,7 +697,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			item.Result = map[string]any{"ok": true}
 
 		default:
-			markFailed(fmt.Errorf("unsupported workflow action: %s", action))
+			markFailed(fmt.Errorf("unsupported workflow action: %s", strings.TrimSpace(step.Action)))
 		}
 
 		if stoppedEarly {
@@ -679,6 +712,23 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		"stopped_early": stoppedEarly,
 		"steps":         steps,
 	})
+}
+
+func normalizeWorkflowAction(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "create_sandbox", "create", "createsandbox":
+		return "create_sandbox"
+	case "exec_command", "exec", "execcommand":
+		return "exec_command"
+	case "create_snapshot", "snapshot", "createsnapshot":
+		return "create_snapshot"
+	case "rollback_snapshot", "rollback", "rollbacksnapshot":
+		return "rollback_snapshot"
+	case "delete_sandbox", "delete", "deletesandbox":
+		return "delete_sandbox"
+	default:
+		return strings.TrimSpace(action)
+	}
 }
 
 func (r *Router) readOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {

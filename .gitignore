@@ -27,3 +27,6 @@ server/data/
 
 # Local assistant change journal
 .local-change-log.md
+
+# Local runtime test notes
+Agent真实调用测试_*.md
