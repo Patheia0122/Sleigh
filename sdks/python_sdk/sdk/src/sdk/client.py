@@ -162,7 +162,7 @@ class SleighClient:
         *,
         session_token: str,
         sandbox_id: str,
-        host_path: str,
+        workspace_path: str,
         container_path: str,
         mode: str = "rw",
     ) -> dict[str, Any]:
@@ -171,7 +171,7 @@ class SleighClient:
             f"/sandboxes/{sandbox_id}/mounts",
             json_body={
                 "session_token": session_token,
-                "host_path": host_path,
+                "workspace_path": workspace_path,
                 "container_path": container_path,
                 "mode": mode,
             },
@@ -267,7 +267,7 @@ class SleighClient:
         *,
         session_token: str,
         sandbox_id: str,
-        cwd: str,
+        workspace_path: str,
         patch: str,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
@@ -276,7 +276,7 @@ class SleighClient:
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "session_token": session_token,
-            "cwd": cwd,
+            "workspace_path": workspace_path,
             "patch": patch,
         }
         if build_language is not None:

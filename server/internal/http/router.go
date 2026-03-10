@@ -61,7 +61,7 @@ type expandMemoryRequest struct {
 
 type mountRequest struct {
 	SessionToken  string `json:"session_token"`
-	HostPath      string `json:"host_path"`
+	WorkspacePath string `json:"workspace_path"`
 	ContainerPath string `json:"container_path"`
 	Mode          string `json:"mode"`
 }
@@ -93,7 +93,7 @@ type readOpResponse struct {
 
 type patchOpRequest struct {
 	SessionToken   string `json:"session_token"`
-	Cwd            string `json:"cwd"`
+	WorkspacePath  string `json:"workspace_path"`
 	Patch          string `json:"patch"`
 	BuildLanguage  string `json:"build_language,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
@@ -731,6 +731,35 @@ func normalizeWorkflowAction(action string) string {
 	}
 }
 
+func resolveWorkspacePath(allowedRoot, workspacePath string) (string, error) {
+	root := strings.TrimSpace(allowedRoot)
+	if root == "" || !filepath.IsAbs(root) {
+		return "", errors.New("server mount allowed root is invalid")
+	}
+
+	raw := strings.TrimSpace(workspacePath)
+	if raw == "" {
+		return "", errors.New("workspace_path is required")
+	}
+
+	clean := filepath.Clean(raw)
+	if filepath.IsAbs(clean) {
+		clean = strings.TrimPrefix(clean, string(filepath.Separator))
+	}
+	if clean == "." || clean == "" {
+		return root, nil
+	}
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("workspace_path cannot escape allowed root")
+	}
+
+	resolved := filepath.Join(root, clean)
+	if !isPathWithinRoot(resolved, root) {
+		return "", errors.New("workspace_path is outside allowed host root")
+	}
+	return resolved, nil
+}
+
 func (r *Router) readOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	sandboxID := strings.TrimSpace(req.PathValue("id"))
 	if sandboxID == "" {
@@ -830,9 +859,9 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	cwd := strings.TrimSpace(body.Cwd)
-	if cwd == "" || !filepath.IsAbs(cwd) {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("cwd must be an absolute path"))
+	cwd, err := resolveWorkspacePath(r.config.MountAllowedRoot, body.WorkspacePath)
+	if err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
 	if info, err := os.Stat(cwd); err != nil {
@@ -844,11 +873,6 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	}
 	if strings.TrimSpace(body.Patch) == "" {
 		writeError(w, stdhttp.StatusBadRequest, errors.New("patch is required"))
-		return
-	}
-	mountRoot := strings.TrimSpace(r.config.MountAllowedRoot)
-	if mountRoot == "" || !filepath.IsAbs(mountRoot) || !isPathWithinRoot(cwd, mountRoot) {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("cwd is outside allowed host root"))
 		return
 	}
 	mounts, err := r.service.ListMounts(req.Context(), sandboxID)
@@ -1175,18 +1199,14 @@ func (r *Router) mountPath(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	hostPath := strings.TrimSpace(body.HostPath)
-	containerPath := strings.TrimSpace(body.ContainerPath)
-	if hostPath == "" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("host_path is required"))
+	hostPath, err := resolveWorkspacePath(r.config.MountAllowedRoot, body.WorkspacePath)
+	if err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
+	containerPath := strings.TrimSpace(body.ContainerPath)
 	if containerPath == "" {
 		writeError(w, stdhttp.StatusBadRequest, errors.New("container_path is required"))
-		return
-	}
-	if !filepath.IsAbs(hostPath) {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("host_path must be an absolute path"))
 		return
 	}
 	if !filepath.IsAbs(containerPath) {

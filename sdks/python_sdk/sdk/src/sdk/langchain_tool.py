@@ -41,7 +41,10 @@ class SleighToolInput(BaseModel):
         None, ge=1, le=300, description="Max seconds to wait when wait=true (default 10)."
     )
     image: str = Field("alpine:3.20", description="Container image when creating a sandbox.")
-    host_path: str | None = Field(None, description="Host path to mount.")
+    workspace_path: str | None = Field(
+        None,
+        description="Path relative to SERVER_MOUNT_ALLOWED_ROOT (leading '/' allowed).",
+    )
     container_path: str | None = Field(None, description="Container mount path.")
     mode: str = Field("rw", description="Mount mode: rw or ro.")
     target_mb: int | None = Field(None, description="Target memory limit in MB.")
@@ -128,7 +131,7 @@ class SleighLangChainClient:
             return self.client.mount_path(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
-                host_path=_require(data.host_path, "host_path"),
+                workspace_path=_require(data.workspace_path, "workspace_path"),
                 container_path=_require(data.container_path, "container_path"),
                 mode=data.mode,
             )
@@ -176,7 +179,7 @@ class SleighLangChainClient:
             return self.client.patch_workspace(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
-                cwd=_require(data.cwd, "cwd"),
+                workspace_path=_require(data.workspace_path, "workspace_path"),
                 patch=_require(data.patch_text, "patch_text"),
                 build_language=data.build_language,
                 timeout_seconds=data.timeout_seconds,

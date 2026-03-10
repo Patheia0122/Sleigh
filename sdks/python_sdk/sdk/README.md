@@ -79,13 +79,13 @@ print(read_result)
 
 - `POST /sandboxes/{id}/ops/patch`
 - validates sandbox auth + mounted workspace path ownership
-- `cwd` is required and must point to a mounted host directory for that sandbox
+- `workspace_path` is required and is resolved under `SERVER_MOUNT_ALLOWED_ROOT`
 
 ```python
 result = client.patch_workspace(
     session_token=session_token,
     sandbox_id=sandbox_id,
-    cwd="/home/hxluo/sleigh_env",
+    workspace_path="/test",
     patch="*** Begin Patch\n*** End Patch\n",
 )
 ```

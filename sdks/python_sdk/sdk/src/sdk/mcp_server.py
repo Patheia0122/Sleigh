@@ -77,11 +77,11 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.list_mounts(session_token=session_token, sandbox_id=sandbox_id)
 
     @mcp.tool()
-    def mount_path(session_token: str, sandbox_id: str, host_path: str, container_path: str, mode: str = "rw"):
+    def mount_path(session_token: str, sandbox_id: str, workspace_path: str, container_path: str, mode: str = "rw"):
         return client.mount_path(
             session_token=session_token,
             sandbox_id=sandbox_id,
-            host_path=host_path,
+            workspace_path=workspace_path,
             container_path=container_path,
             mode=mode,
         )
@@ -131,7 +131,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
     def patch_workspace(
         session_token: str,
         sandbox_id: str,
-        cwd: str,
+        workspace_path: str,
         patch: str,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
@@ -141,7 +141,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.patch_workspace(
             session_token=session_token,
             sandbox_id=sandbox_id,
-            cwd=cwd,
+            workspace_path=workspace_path,
             patch=patch,
             build_language=build_language,
             timeout_seconds=timeout_seconds,

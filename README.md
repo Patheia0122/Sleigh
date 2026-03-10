@@ -98,6 +98,8 @@ docker compose up --build
 - `POST /sandboxes/{id}/ops/patch` sandbox-scoped patch pipeline (mounted workspace)
 - `GET /sessions/{sessionId}/exec-tasks` paginated history
 
+For mount/patch style write operations, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally.
+
 All protected endpoints require `session_token` (body or query).
 
 Read/patch style endpoints return an AI-friendly envelope:
