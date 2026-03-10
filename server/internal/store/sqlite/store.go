@@ -77,6 +77,16 @@ func Open(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	// Reduce SQLITE_BUSY under concurrent API traffic.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	if _, err := db.ExecContext(context.Background(), `PRAGMA busy_timeout = 5000`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("set sqlite busy_timeout pragma: %w", err)
+	}
+	_, _ = db.ExecContext(context.Background(), `PRAGMA journal_mode = WAL`)
+	_, _ = db.ExecContext(context.Background(), `PRAGMA synchronous = NORMAL`)
 
 	if err := migrate(context.Background(), db); err != nil {
 		_ = db.Close()

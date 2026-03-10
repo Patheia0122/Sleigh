@@ -208,10 +208,12 @@ class SleighClient:
         self,
         *,
         session_token: str,
-        session_id: str,
+        session_id: str | None = None,
         limit: int = 20,
         cursor: str | None = None,
     ) -> dict[str, Any]:
+        if session_id is None or str(session_id).strip() == "":
+            session_id = session_token
         return self._request(
             "GET",
             f"/sessions/{session_id}/exec-tasks",

@@ -151,7 +151,7 @@ class SleighLangChainClient:
         if action == "list_session_exec_tasks":
             return self.client.list_session_exec_tasks(
                 session_token=token,
-                session_id=_require(data.session_id, "session_id"),
+                session_id=data.session_id,
                 limit=data.limit,
                 cursor=data.cursor,
             )

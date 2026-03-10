@@ -79,6 +79,7 @@ print(read_result)
 
 - `POST /sandboxes/{id}/ops/patch`
 - validates sandbox auth + mounted workspace path ownership
+- `cwd` is required and must point to a mounted host directory for that sandbox
 
 ```python
 result = client.patch_workspace(
@@ -112,3 +113,16 @@ created = client.create_sandbox(
 
 - LangChain integration: `../README_langchain.md`
 - MCP integration: `../README_mcp.md`
+
+## 8. Session Exec History
+
+`list_session_exec_tasks` accepts optional `session_id`.
+If omitted, SDK uses `session_token` as `session_id` automatically:
+
+```python
+history = client.list_session_exec_tasks(
+    session_token=session_token,
+    limit=20,
+)
+print(history)
+```

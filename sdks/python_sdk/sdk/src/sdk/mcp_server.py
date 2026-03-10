@@ -91,7 +91,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.unmount_path(session_token=session_token, sandbox_id=sandbox_id, mount_id=mount_id)
 
     @mcp.tool()
-    def list_session_exec_tasks(session_token: str, session_id: str, limit: int = 20, cursor: str | None = None):
+    def list_session_exec_tasks(session_token: str, session_id: str | None = None, limit: int = 20, cursor: str | None = None):
         return client.list_session_exec_tasks(
             session_token=session_token,
             session_id=session_id,

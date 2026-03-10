@@ -1049,8 +1049,7 @@ func (r *Router) listSessionExecTasks(w stdhttp.ResponseWriter, req *stdhttp.Req
 	}
 	sessionID := strings.TrimSpace(req.PathValue("sessionId"))
 	if sessionID == "" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("session id is required"))
-		return
+		sessionID = sessionIDToken
 	}
 	if sessionIDToken != sessionID {
 		writeDomainError(w, appErr.ErrForbidden)
@@ -1126,11 +1125,34 @@ func (r *Router) mountPath(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	hostPath := strings.TrimSpace(body.HostPath)
+	containerPath := strings.TrimSpace(body.ContainerPath)
+	if hostPath == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("host_path is required"))
+		return
+	}
+	if containerPath == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("container_path is required"))
+		return
+	}
+	if !filepath.IsAbs(hostPath) {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("host_path must be an absolute path"))
+		return
+	}
+	if !filepath.IsAbs(containerPath) {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("container_path must be an absolute path"))
+		return
+	}
+	mode := strings.TrimSpace(body.Mode)
+	if mode != "" && mode != "rw" && mode != "ro" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("mode must be one of: rw, ro"))
+		return
+	}
 
 	result, err := r.service.MountPath(req.Context(), sandboxID, sandbox.MountRequest{
-		HostPath:      body.HostPath,
-		ContainerPath: body.ContainerPath,
-		Mode:          body.Mode,
+		HostPath:      hostPath,
+		ContainerPath: containerPath,
+		Mode:          mode,
 	})
 	if err != nil {
 		writeDomainError(w, err)
