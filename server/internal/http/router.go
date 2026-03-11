@@ -100,7 +100,10 @@ type readOpResponse struct {
 type patchOpRequest struct {
 	SessionToken   string `json:"session_token"`
 	SandboxPath    string `json:"sandbox_path"`
-	Patch          string `json:"patch"`
+	WriteMode      string `json:"write_mode,omitempty"`
+	Patch          string `json:"patch,omitempty"`
+	TargetFilePath string `json:"target_file_path,omitempty"`
+	Content        string `json:"content,omitempty"`
 	BuildLanguage  string `json:"build_language,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	MaxOutputBytes int    `json:"max_output_bytes,omitempty"`
@@ -883,8 +886,17 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
-	if strings.TrimSpace(body.Patch) == "" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("patch is required"))
+	writeMode, err := normalizePatchWriteMode(body.WriteMode)
+	if err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
+		return
+	}
+	if writeMode == "patch" && strings.TrimSpace(body.Patch) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("patch is required for write_mode=patch"))
+		return
+	}
+	if writeMode == "replace_file" && strings.TrimSpace(body.TargetFilePath) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("target_file_path is required for write_mode=replace_file"))
 		return
 	}
 	if err := r.service.EnsureRunning(req.Context(), sandboxID); err != nil {
@@ -921,19 +933,22 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
-	tmpFile, err := os.CreateTemp("", "sleigh-patch-*.diff")
-	if err != nil {
-		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create temp patch file: %w", err))
-		return
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmpFile.WriteString(body.Patch); err != nil {
+	tmpPath := ""
+	if writeMode == "patch" {
+		tmpFile, err := os.CreateTemp("", "sleigh-patch-*.diff")
+		if err != nil {
+			writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create temp patch file: %w", err))
+			return
+		}
+		tmpPath = tmpFile.Name()
+		defer os.Remove(tmpPath)
+		if _, err := tmpFile.WriteString(body.Patch); err != nil {
+			_ = tmpFile.Close()
+			writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("write patch temp file: %w", err))
+			return
+		}
 		_ = tmpFile.Close()
-		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("write patch temp file: %w", err))
-		return
 	}
-	_ = tmpFile.Close()
 
 	ensureOut, ensureErr := ensureSandboxDirectory(runCtx, sandboxID, sandboxPath)
 	if ensureErr != nil {
@@ -970,28 +985,47 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
-	checkOut, checkErr := runGitApplyCommand(runCtx, cwd, "apply", "--check", tmpPath)
-	if checkErr != nil {
-		stdout, omittedOut, truncOut := applyOutputLimits(checkOut.stdout, maxOutputBytes, maxLines)
-		stderr, omittedErr, truncErr := applyOutputLimits(checkOut.stderr, maxOutputBytes, maxLines)
-		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
-			Status:       "error",
-			DurationMS:   time.Since(started).Milliseconds(),
-			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
-			Truncated:    truncOut || truncErr,
-			Stdout:       stdout,
-			Stderr:       stderr,
-			Error:        "git apply --check failed: patch_text must be a complete git patch (not raw source code). Use unified diff with headers such as '*** Begin Patch' or 'diff --git ...'; for new/delete/rename, include metadata like 'new file mode'/'deleted file mode'/'rename from'/'rename to' and 'index'.",
-			BuildStatus:  "not_run",
-			OmittedBytes: omittedOut + omittedErr,
-		})
-		return
+	checkOut := commandOutput{}
+	applyOut := commandOutput{}
+	numstatOut := commandOutput{}
+	applyErr := error(nil)
+	appliedFiles := []string{}
+	if writeMode == "patch" {
+		checkOut, err = runGitApplyCommand(runCtx, cwd, "apply", "--check", "--recount", tmpPath)
+		if err != nil {
+			stdout, omittedOut, truncOut := applyOutputLimits(checkOut.stdout, maxOutputBytes, maxLines)
+			stderr, omittedErr, truncErr := applyOutputLimits(checkOut.stderr, maxOutputBytes, maxLines)
+			writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+				Status:       "error",
+				DurationMS:   time.Since(started).Milliseconds(),
+				TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
+				Truncated:    truncOut || truncErr,
+				Stdout:       stdout,
+				Stderr:       stderr,
+				Error:        formatPatchCheckError(err, checkOut.stderr),
+				BuildStatus:  "not_run",
+				OmittedBytes: omittedOut + omittedErr,
+			})
+			return
+		}
+		numstatOut, _ = runGitApplyCommand(runCtx, cwd, "apply", "--numstat", "--recount", tmpPath)
+		appliedFiles = parseApplyNumstatFiles(numstatOut.stdout)
+		applyOut, applyErr = runGitApplyCommand(runCtx, cwd, "apply", "--recount", tmpPath)
+	} else {
+		var targetFile string
+		targetFile, err = rewriteFileInWorkspace(cwd, sandboxPath, body.TargetFilePath, body.Content)
+		if err != nil {
+			writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+				Status:      "error",
+				DurationMS:  time.Since(started).Milliseconds(),
+				TimedOut:    errors.Is(runCtx.Err(), context.DeadlineExceeded),
+				Error:       err.Error(),
+				BuildStatus: "not_run",
+			})
+			return
+		}
+		appliedFiles = []string{targetFile}
 	}
-
-	numstatOut, _ := runGitApplyCommand(runCtx, cwd, "apply", "--numstat", tmpPath)
-	appliedFiles := parseApplyNumstatFiles(numstatOut.stdout)
-
-	applyOut, applyErr := runGitApplyCommand(runCtx, cwd, "apply", tmpPath)
 	stdout, omittedOut, truncOut := applyOutputLimits(checkOut.stdout+applyOut.stdout, maxOutputBytes, maxLines)
 	stderr, omittedErr, truncErr := applyOutputLimits(checkOut.stderr+applyOut.stderr, maxOutputBytes, maxLines)
 	resp := patchOpResponse{
@@ -1532,6 +1566,67 @@ func normalizeSandboxPatchPath(raw string) (string, error) {
 		return "", errors.New("sandbox_path is not writable target")
 	}
 	return path, nil
+}
+
+func normalizePatchWriteMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case "", "patch":
+		return "patch", nil
+	case "replace_file", "rewrite", "overwrite":
+		return "replace_file", nil
+	default:
+		return "", errors.New("write_mode must be one of: patch, replace_file")
+	}
+}
+
+func rewriteFileInWorkspace(cwd, sandboxPath, targetFilePath, content string) (string, error) {
+	rawTarget := strings.TrimSpace(targetFilePath)
+	if rawTarget == "" {
+		return "", errors.New("target_file_path is required for write_mode=replace_file")
+	}
+	var relativeTarget string
+	if filepath.IsAbs(rawTarget) {
+		cleanSandbox := filepath.Clean(sandboxPath)
+		cleanTarget := filepath.Clean(rawTarget)
+		if cleanTarget == cleanSandbox {
+			return "", errors.New("target_file_path must be a file path, not sandbox_path itself")
+		}
+		if !strings.HasPrefix(cleanTarget, cleanSandbox+string(filepath.Separator)) {
+			return "", errors.New("target_file_path must be inside sandbox_path for write_mode=replace_file")
+		}
+		relativeTarget = strings.TrimPrefix(cleanTarget, cleanSandbox+string(filepath.Separator))
+	} else {
+		relativeTarget = filepath.Clean(rawTarget)
+	}
+	if relativeTarget == "." || relativeTarget == "" {
+		return "", errors.New("target_file_path must be a file path")
+	}
+	if strings.HasPrefix(relativeTarget, ".."+string(filepath.Separator)) || relativeTarget == ".." {
+		return "", errors.New("target_file_path cannot escape sandbox_path")
+	}
+	localTarget := filepath.Join(cwd, relativeTarget)
+	if err := os.MkdirAll(filepath.Dir(localTarget), 0o755); err != nil {
+		return "", fmt.Errorf("create target directory failed: %w", err)
+	}
+	if err := os.WriteFile(localTarget, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write target file failed: %w", err)
+	}
+	return relativeTarget, nil
+}
+
+func formatPatchCheckError(err error, stderr string) string {
+	lower := strings.ToLower(strings.TrimSpace(stderr + "\n" + fmt.Sprint(err)))
+	if strings.Contains(lower, "corrupt patch at line") {
+		return "git apply --check failed: patch appears malformed or truncated (e.g. invalid hunk header/line counts). Regenerate a complete git patch against current file content, or use write_mode=replace_file with target_file_path/content for full overwrite."
+	}
+	if strings.Contains(lower, "dev/null: no such file or directory") {
+		return "git apply --check failed: new-file patch metadata is incomplete. For file create/delete/rename, include complete git headers like new file mode/deleted file mode/rename from/rename to and index."
+	}
+	if strings.Contains(lower, "patch does not apply") {
+		return "git apply --check failed: patch context does not match current file content. Read current file first, then regenerate patch against latest content."
+	}
+	return "git apply --check failed: patch_text must be a complete git patch (not raw source code). Use unified diff with headers such as '*** Begin Patch' or 'diff --git ...'; for new/delete/rename, include metadata like 'new file mode'/'deleted file mode'/'rename from'/'rename to' and 'index'."
 }
 
 func sandboxContainerName(sandboxID string) string {

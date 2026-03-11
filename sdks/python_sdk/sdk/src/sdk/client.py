@@ -281,7 +281,10 @@ class SleighClient:
         session_token: str,
         sandbox_id: str,
         sandbox_path: str,
-        patch: str,
+        patch: str | None = None,
+        write_mode: str | None = None,
+        target_file_path: str | None = None,
+        content: str | None = None,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
         max_output_bytes: int | None = None,
@@ -290,8 +293,15 @@ class SleighClient:
         body: dict[str, Any] = {
             "session_token": session_token,
             "sandbox_path": sandbox_path,
-            "patch": patch,
         }
+        if patch is not None:
+            body["patch"] = patch
+        if write_mode is not None:
+            body["write_mode"] = write_mode
+        if target_file_path is not None:
+            body["target_file_path"] = target_file_path
+        if content is not None:
+            body["content"] = content
         if build_language is not None:
             body["build_language"] = build_language
         if timeout_seconds is not None:

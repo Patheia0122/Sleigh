@@ -77,6 +77,10 @@ class SleighToolInput(BaseModel):
     max_output_bytes: int | None = Field(None, ge=1, le=1048576, description="Max captured bytes per stream.")
     max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
+    write_mode: Literal["patch", "replace_file"] | None = Field(
+        None,
+        description="patch_workspace mode: 'patch' for git patch apply, 'replace_file' for full file overwrite.",
+    )
     patch_text: str | None = Field(
         None,
         description=(
@@ -88,6 +92,14 @@ class SleighToolInput(BaseModel):
     sandbox_path: str | None = Field(
         None,
         description="Absolute target directory path inside sandbox for patch_workspace.",
+    )
+    target_file_path: str | None = Field(
+        None,
+        description="For write_mode=replace_file: target file path to overwrite (absolute in sandbox or relative to sandbox_path).",
+    )
+    content: str | None = Field(
+        None,
+        description="For write_mode=replace_file: raw file content to write.",
     )
     build_language: str | None = Field(
         None,
@@ -202,11 +214,23 @@ class SleighLangChainClient:
                 output_offset=data.output_offset,
             )
         if action == "patch_workspace":
+            mode = (data.write_mode or "patch").strip()
+            if mode == "patch":
+                _require(data.patch_text, "patch_text")
+            elif mode == "replace_file":
+                _require(data.target_file_path, "target_file_path")
+                if data.content is None:
+                    raise ValueError("content is required for write_mode=replace_file")
+            else:
+                raise ValueError("write_mode must be one of: patch, replace_file")
             return self.client.patch_workspace(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
                 sandbox_path=_require(data.sandbox_path, "sandbox_path"),
-                patch=_require(data.patch_text, "patch_text"),
+                patch=data.patch_text,
+                write_mode=mode,
+                target_file_path=data.target_file_path,
+                content=data.content,
                 build_language=data.build_language,
                 timeout_seconds=data.timeout_seconds,
                 max_output_bytes=data.max_output_bytes,
@@ -233,8 +257,8 @@ class SleighLangChainClient:
                 "Sleigh runtime unified tool. "
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
                 "First call action=create_session_token, then pass session_token to other actions. "
-                "For patch_workspace, provide complete git patch text (prefer full diff --git format), "
-                "not raw file content."
+                "For patch_workspace, either provide complete git patch text (write_mode=patch, prefer full diff --git format) "
+                "or use write_mode=replace_file with target_file_path/content for full overwrite."
             )
 
         def runtime_tool(**kwargs) -> str:

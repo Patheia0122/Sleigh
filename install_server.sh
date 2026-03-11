@@ -66,8 +66,9 @@ msg() {
       venv_create_failed) echo "错误: 创建 Python 虚拟环境失败，请确认已安装 python3-venv。" ;;
       precommit_install_failed) echo "错误: pre-commit 安装失败。请检查服务端网络、pip 源或代理配置后重试。" ;;
       existing_config_detected) echo "检测到已有安装配置。" ;;
-      ask_config_apply_mode) echo "请选择配置应用方式: [1] 仅更新配置(不重启) [2] 更新并重启服务 [3] 取消安装" ;;
+      ask_config_apply_mode) echo "请选择安装方式: [1] 更新配置并重启 [2] 保留原有配置并重启 [3] 取消安装" ;;
       config_apply_cancelled) echo "已取消安装，不修改现有配置。" ;;
+      keep_config_env_missing) echo "错误: 未找到现有环境配置文件，无法保留原有配置并重启。" ;;
       ask_mount) echo "请输入挂载白名单根目录（回车使用默认目录）:" ;;
       ask_server_addr) echo "请输入服务监听地址（例如 :8080、0.0.0.0:8080）:" ;;
       ask_server_version) echo "请输入服务版本标识（用于诊断展示）:" ;;
@@ -118,8 +119,9 @@ msg() {
       venv_create_failed) echo "Error: failed to create Python virtual environment. Please install python3-venv." ;;
       precommit_install_failed) echo "Error: failed to install pre-commit. Check server network, pip source, or proxy settings and retry." ;;
       existing_config_detected) echo "Detected existing installation config." ;;
-      ask_config_apply_mode) echo "Choose config apply mode: [1] update config only (no restart) [2] update and restart service [3] cancel install" ;;
+      ask_config_apply_mode) echo "Choose install mode: [1] update config and restart [2] keep existing config and restart [3] cancel install" ;;
       config_apply_cancelled) echo "Install cancelled. Existing config is unchanged." ;;
+      keep_config_env_missing) echo "Error: existing env config file not found; cannot keep existing config and restart." ;;
       ask_mount) echo "Enter mount allowlist root (press Enter for default):" ;;
       ask_server_addr) echo "Enter server listen address (e.g. :8080, 0.0.0.0:8080):" ;;
       ask_server_version) echo "Enter server version label (for diagnostics):" ;;
@@ -232,10 +234,10 @@ if [[ -f "${ENV_FILE}" || -f "${INSTALL_STATE_FILE}" ]]; then
   APPLY_CHOICE="$(trim "${USER_INPUT}")"
   case "${APPLY_CHOICE}" in
     1|"")
-      CONFIG_APPLY_MODE="update"
+      CONFIG_APPLY_MODE="update_restart"
       ;;
     2)
-      CONFIG_APPLY_MODE="restart"
+      CONFIG_APPLY_MODE="keep_restart"
       ;;
     3)
       echo "$(msg config_apply_cancelled)"
@@ -248,142 +250,171 @@ if [[ -f "${ENV_FILE}" || -f "${INSTALL_STATE_FILE}" ]]; then
   esac
 fi
 
-echo "$(msg default_dir) ${DEFAULT_MOUNT_ROOT}"
-echo "$(msg ask_mount)"
-read -r USER_INPUT
-MOUNT_ROOT="$(trim "${USER_INPUT}")"
-if [[ -z "${MOUNT_ROOT}" ]]; then
-  MOUNT_ROOT="${DEFAULT_MOUNT_ROOT}"
-  if [[ -e "${MOUNT_ROOT}" ]]; then
-    echo "$(msg default_exists) ${MOUNT_ROOT}" >&2
-    echo "$(msg abort_install)" >&2
+if [[ "${CONFIG_APPLY_MODE}" == "keep_restart" ]]; then
+  if [[ ! -f "${ENV_FILE}" ]]; then
+    echo "$(msg keep_config_env_missing)" >&2
     exit 1
   fi
-fi
+  SERVER_ADDR="$(sed -n 's/^SERVER_ADDR=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  SERVER_VERSION="$(sed -n 's/^SERVER_VERSION=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  WARM_POOL_SIZE="$(sed -n 's/^WARM_POOL_SIZE=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  WARM_POOL_IMAGE="$(sed -n 's/^WARM_POOL_IMAGE=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  WARM_POOL_MEMORY_MB="$(sed -n 's/^WARM_POOL_MEMORY_MB=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  EXEC_TASK_TTL_DAYS="$(sed -n 's/^EXEC_TASK_TTL_DAYS=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  IMAGE_PULL_TIMEOUT_SECONDS="$(sed -n 's/^IMAGE_PULL_TIMEOUT_SECONDS=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  SANDBOX_IDLE_TTL_DAYS="$(sed -n 's/^SANDBOX_IDLE_TTL_DAYS=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  CURSOR_TOKEN_SECRET="$(sed -n 's/^CURSOR_TOKEN_SECRET=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  SERVER_OTEL_EXPORTER_OTLP_ENDPOINT="$(sed -n 's/^SERVER_OTEL_EXPORTER_OTLP_ENDPOINT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  MOUNT_ROOT="$(sed -n 's/^SERVER_MOUNT_ALLOWED_ROOT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
 
-if [[ "${MOUNT_ROOT}" != /* ]]; then
-  echo "$(msg abs_path)" >&2
-  exit 1
-fi
-
-echo "$(msg default_value) ${DEFAULT_SERVER_ADDR}"
-echo "$(msg ask_server_addr)"
-read -r USER_INPUT
-SERVER_ADDR="$(trim "${USER_INPUT}")"
-if [[ -z "${SERVER_ADDR}" ]]; then
-  SERVER_ADDR="${DEFAULT_SERVER_ADDR}"
-fi
-
-echo "$(msg default_value) ${DEFAULT_SERVER_VERSION}"
-echo "$(msg ask_server_version)"
-read -r USER_INPUT
-SERVER_VERSION="$(trim "${USER_INPUT}")"
-if [[ -z "${SERVER_VERSION}" ]]; then
-  SERVER_VERSION="${DEFAULT_SERVER_VERSION}"
-fi
-
-echo "$(msg default_value) ${DEFAULT_WARM_POOL_SIZE}"
-echo "$(msg ask_warm_pool_size)"
-read -r USER_INPUT
-WARM_POOL_SIZE="$(trim "${USER_INPUT}")"
-if [[ -z "${WARM_POOL_SIZE}" ]]; then
-  WARM_POOL_SIZE="${DEFAULT_WARM_POOL_SIZE}"
-fi
-if ! [[ "${WARM_POOL_SIZE}" =~ ^[0-9]+$ ]]; then
-  echo "$(msg invalid_number) (WARM_POOL_SIZE)" >&2
-  exit 1
-fi
-
-echo "$(msg default_value) ${DEFAULT_WARM_POOL_IMAGE}"
-echo "$(msg ask_warm_pool_image)"
-read -r USER_INPUT
-WARM_POOL_IMAGE="$(trim "${USER_INPUT}")"
-if [[ -z "${WARM_POOL_IMAGE}" ]]; then
-  WARM_POOL_IMAGE="${DEFAULT_WARM_POOL_IMAGE}"
-fi
-
-echo "$(msg default_value) ${DEFAULT_WARM_POOL_MEMORY_MB}"
-echo "$(msg ask_warm_pool_memory)"
-read -r USER_INPUT
-WARM_POOL_MEMORY_MB="$(trim "${USER_INPUT}")"
-if [[ -z "${WARM_POOL_MEMORY_MB}" ]]; then
-  WARM_POOL_MEMORY_MB="${DEFAULT_WARM_POOL_MEMORY_MB}"
-fi
-if ! [[ "${WARM_POOL_MEMORY_MB}" =~ ^[0-9]+$ ]]; then
-  echo "$(msg invalid_number) (WARM_POOL_MEMORY_MB)" >&2
-  exit 1
-fi
-
-echo "$(msg default_value) ${DEFAULT_EXEC_TASK_TTL_DAYS}"
-echo "$(msg ask_exec_ttl_days)"
-read -r USER_INPUT
-EXEC_TASK_TTL_DAYS="$(trim "${USER_INPUT}")"
-if [[ -z "${EXEC_TASK_TTL_DAYS}" ]]; then
-  EXEC_TASK_TTL_DAYS="${DEFAULT_EXEC_TASK_TTL_DAYS}"
-fi
-if ! [[ "${EXEC_TASK_TTL_DAYS}" =~ ^[0-9]+$ ]]; then
-  echo "$(msg invalid_number) (EXEC_TASK_TTL_DAYS)" >&2
-  exit 1
-fi
-
-echo "$(msg default_value) ${DEFAULT_IMAGE_PULL_TIMEOUT_SECONDS}"
-echo "$(msg ask_image_pull_timeout)"
-read -r USER_INPUT
-IMAGE_PULL_TIMEOUT_SECONDS="$(trim "${USER_INPUT}")"
-if [[ -z "${IMAGE_PULL_TIMEOUT_SECONDS}" ]]; then
-  IMAGE_PULL_TIMEOUT_SECONDS="${DEFAULT_IMAGE_PULL_TIMEOUT_SECONDS}"
-fi
-if ! [[ "${IMAGE_PULL_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]; then
-  echo "$(msg invalid_number) (IMAGE_PULL_TIMEOUT_SECONDS)" >&2
-  exit 1
-fi
-
-echo "$(msg default_value) ${DEFAULT_SANDBOX_IDLE_TTL_DAYS}"
-echo "$(msg ask_idle_ttl_days)"
-read -r USER_INPUT
-SANDBOX_IDLE_TTL_DAYS="$(trim "${USER_INPUT}")"
-if [[ -z "${SANDBOX_IDLE_TTL_DAYS}" ]]; then
-  SANDBOX_IDLE_TTL_DAYS="${DEFAULT_SANDBOX_IDLE_TTL_DAYS}"
-fi
-if ! [[ "${SANDBOX_IDLE_TTL_DAYS}" =~ ^[0-9]+$ ]]; then
-  echo "$(msg invalid_number) (SANDBOX_IDLE_TTL_DAYS)" >&2
-  exit 1
-fi
-
-echo "$(msg ask_cursor_secret)"
-read -r USER_INPUT
-CURSOR_TOKEN_SECRET="$(trim "${USER_INPUT}")"
-if [[ -z "${CURSOR_TOKEN_SECRET}" ]]; then
-  CURSOR_TOKEN_SECRET="$(random_secret)"
-fi
-
-echo "$(msg default_value) ${DEFAULT_SERVER_OTEL_EXPORTER_OTLP_ENDPOINT:-<empty>}"
-echo "$(msg ask_otel_url)"
-read -r USER_INPUT
-SERVER_OTEL_EXPORTER_OTLP_ENDPOINT="$(trim "${USER_INPUT}")"
-if [[ -z "${SERVER_OTEL_EXPORTER_OTLP_ENDPOINT}" ]]; then
-  SERVER_OTEL_EXPORTER_OTLP_ENDPOINT="${DEFAULT_SERVER_OTEL_EXPORTER_OTLP_ENDPOINT}"
-fi
-
-if PORT="$(extract_port_from_addr "${SERVER_ADDR}")"; then
-  if [[ "${PORT}" -lt 1 || "${PORT}" -gt 65535 ]]; then
-    echo "$(msg invalid_port) ${SERVER_ADDR}" >&2
-    exit 1
-  fi
-  if is_port_in_use "${PORT}"; then
-    SERVICE_ACTIVE="false"
-    if ${SUDO} systemctl is-active --quiet "${SERVICE_NAME}.service"; then
-      SERVICE_ACTIVE="true"
-    fi
-    CURRENT_SERVER_ADDR=""
-    if [[ -f "${ENV_FILE}" ]]; then
-      CURRENT_SERVER_ADDR="$(sed -n 's/^SERVER_ADDR=//p' "${ENV_FILE}" | head -n 1 | xargs)"
-    fi
-    if [[ "${SERVICE_ACTIVE}" == "true" && -n "${CURRENT_SERVER_ADDR}" && "${CURRENT_SERVER_ADDR}" == "${SERVER_ADDR}" ]]; then
-      echo "$(msg port_owned_by_running_service)"
-    else
-      echo "$(msg port_in_use) ${SERVER_ADDR}" >&2
+  [[ -n "${SERVER_ADDR}" ]] || SERVER_ADDR="${DEFAULT_SERVER_ADDR}"
+  [[ -n "${SERVER_VERSION}" ]] || SERVER_VERSION="${DEFAULT_SERVER_VERSION}"
+  [[ -n "${WARM_POOL_SIZE}" ]] || WARM_POOL_SIZE="${DEFAULT_WARM_POOL_SIZE}"
+  [[ -n "${WARM_POOL_IMAGE}" ]] || WARM_POOL_IMAGE="${DEFAULT_WARM_POOL_IMAGE}"
+  [[ -n "${WARM_POOL_MEMORY_MB}" ]] || WARM_POOL_MEMORY_MB="${DEFAULT_WARM_POOL_MEMORY_MB}"
+  [[ -n "${EXEC_TASK_TTL_DAYS}" ]] || EXEC_TASK_TTL_DAYS="${DEFAULT_EXEC_TASK_TTL_DAYS}"
+  [[ -n "${IMAGE_PULL_TIMEOUT_SECONDS}" ]] || IMAGE_PULL_TIMEOUT_SECONDS="${DEFAULT_IMAGE_PULL_TIMEOUT_SECONDS}"
+  [[ -n "${SANDBOX_IDLE_TTL_DAYS}" ]] || SANDBOX_IDLE_TTL_DAYS="${DEFAULT_SANDBOX_IDLE_TTL_DAYS}"
+  [[ -n "${CURSOR_TOKEN_SECRET}" ]] || CURSOR_TOKEN_SECRET="$(random_secret)"
+  [[ -n "${MOUNT_ROOT}" ]] || MOUNT_ROOT="${DEFAULT_MOUNT_ROOT}"
+else
+  echo "$(msg default_dir) ${DEFAULT_MOUNT_ROOT}"
+  echo "$(msg ask_mount)"
+  read -r USER_INPUT
+  MOUNT_ROOT="$(trim "${USER_INPUT}")"
+  if [[ -z "${MOUNT_ROOT}" ]]; then
+    MOUNT_ROOT="${DEFAULT_MOUNT_ROOT}"
+    if [[ -e "${MOUNT_ROOT}" ]]; then
+      echo "$(msg default_exists) ${MOUNT_ROOT}" >&2
+      echo "$(msg abort_install)" >&2
       exit 1
+    fi
+  fi
+
+  if [[ "${MOUNT_ROOT}" != /* ]]; then
+    echo "$(msg abs_path)" >&2
+    exit 1
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_SERVER_ADDR}"
+  echo "$(msg ask_server_addr)"
+  read -r USER_INPUT
+  SERVER_ADDR="$(trim "${USER_INPUT}")"
+  if [[ -z "${SERVER_ADDR}" ]]; then
+    SERVER_ADDR="${DEFAULT_SERVER_ADDR}"
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_SERVER_VERSION}"
+  echo "$(msg ask_server_version)"
+  read -r USER_INPUT
+  SERVER_VERSION="$(trim "${USER_INPUT}")"
+  if [[ -z "${SERVER_VERSION}" ]]; then
+    SERVER_VERSION="${DEFAULT_SERVER_VERSION}"
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_WARM_POOL_SIZE}"
+  echo "$(msg ask_warm_pool_size)"
+  read -r USER_INPUT
+  WARM_POOL_SIZE="$(trim "${USER_INPUT}")"
+  if [[ -z "${WARM_POOL_SIZE}" ]]; then
+    WARM_POOL_SIZE="${DEFAULT_WARM_POOL_SIZE}"
+  fi
+  if ! [[ "${WARM_POOL_SIZE}" =~ ^[0-9]+$ ]]; then
+    echo "$(msg invalid_number) (WARM_POOL_SIZE)" >&2
+    exit 1
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_WARM_POOL_IMAGE}"
+  echo "$(msg ask_warm_pool_image)"
+  read -r USER_INPUT
+  WARM_POOL_IMAGE="$(trim "${USER_INPUT}")"
+  if [[ -z "${WARM_POOL_IMAGE}" ]]; then
+    WARM_POOL_IMAGE="${DEFAULT_WARM_POOL_IMAGE}"
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_WARM_POOL_MEMORY_MB}"
+  echo "$(msg ask_warm_pool_memory)"
+  read -r USER_INPUT
+  WARM_POOL_MEMORY_MB="$(trim "${USER_INPUT}")"
+  if [[ -z "${WARM_POOL_MEMORY_MB}" ]]; then
+    WARM_POOL_MEMORY_MB="${DEFAULT_WARM_POOL_MEMORY_MB}"
+  fi
+  if ! [[ "${WARM_POOL_MEMORY_MB}" =~ ^[0-9]+$ ]]; then
+    echo "$(msg invalid_number) (WARM_POOL_MEMORY_MB)" >&2
+    exit 1
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_EXEC_TASK_TTL_DAYS}"
+  echo "$(msg ask_exec_ttl_days)"
+  read -r USER_INPUT
+  EXEC_TASK_TTL_DAYS="$(trim "${USER_INPUT}")"
+  if [[ -z "${EXEC_TASK_TTL_DAYS}" ]]; then
+    EXEC_TASK_TTL_DAYS="${DEFAULT_EXEC_TASK_TTL_DAYS}"
+  fi
+  if ! [[ "${EXEC_TASK_TTL_DAYS}" =~ ^[0-9]+$ ]]; then
+    echo "$(msg invalid_number) (EXEC_TASK_TTL_DAYS)" >&2
+    exit 1
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_IMAGE_PULL_TIMEOUT_SECONDS}"
+  echo "$(msg ask_image_pull_timeout)"
+  read -r USER_INPUT
+  IMAGE_PULL_TIMEOUT_SECONDS="$(trim "${USER_INPUT}")"
+  if [[ -z "${IMAGE_PULL_TIMEOUT_SECONDS}" ]]; then
+    IMAGE_PULL_TIMEOUT_SECONDS="${DEFAULT_IMAGE_PULL_TIMEOUT_SECONDS}"
+  fi
+  if ! [[ "${IMAGE_PULL_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]; then
+    echo "$(msg invalid_number) (IMAGE_PULL_TIMEOUT_SECONDS)" >&2
+    exit 1
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_SANDBOX_IDLE_TTL_DAYS}"
+  echo "$(msg ask_idle_ttl_days)"
+  read -r USER_INPUT
+  SANDBOX_IDLE_TTL_DAYS="$(trim "${USER_INPUT}")"
+  if [[ -z "${SANDBOX_IDLE_TTL_DAYS}" ]]; then
+    SANDBOX_IDLE_TTL_DAYS="${DEFAULT_SANDBOX_IDLE_TTL_DAYS}"
+  fi
+  if ! [[ "${SANDBOX_IDLE_TTL_DAYS}" =~ ^[0-9]+$ ]]; then
+    echo "$(msg invalid_number) (SANDBOX_IDLE_TTL_DAYS)" >&2
+    exit 1
+  fi
+
+  echo "$(msg ask_cursor_secret)"
+  read -r USER_INPUT
+  CURSOR_TOKEN_SECRET="$(trim "${USER_INPUT}")"
+  if [[ -z "${CURSOR_TOKEN_SECRET}" ]]; then
+    CURSOR_TOKEN_SECRET="$(random_secret)"
+  fi
+
+  echo "$(msg default_value) ${DEFAULT_SERVER_OTEL_EXPORTER_OTLP_ENDPOINT:-<empty>}"
+  echo "$(msg ask_otel_url)"
+  read -r USER_INPUT
+  SERVER_OTEL_EXPORTER_OTLP_ENDPOINT="$(trim "${USER_INPUT}")"
+  if [[ -z "${SERVER_OTEL_EXPORTER_OTLP_ENDPOINT}" ]]; then
+    SERVER_OTEL_EXPORTER_OTLP_ENDPOINT="${DEFAULT_SERVER_OTEL_EXPORTER_OTLP_ENDPOINT}"
+  fi
+
+  if PORT="$(extract_port_from_addr "${SERVER_ADDR}")"; then
+    if [[ "${PORT}" -lt 1 || "${PORT}" -gt 65535 ]]; then
+      echo "$(msg invalid_port) ${SERVER_ADDR}" >&2
+      exit 1
+    fi
+    if is_port_in_use "${PORT}"; then
+      SERVICE_ACTIVE="false"
+      if ${SUDO} systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+        SERVICE_ACTIVE="true"
+      fi
+      CURRENT_SERVER_ADDR=""
+      if [[ -f "${ENV_FILE}" ]]; then
+        CURRENT_SERVER_ADDR="$(sed -n 's/^SERVER_ADDR=//p' "${ENV_FILE}" | head -n 1 | xargs)"
+      fi
+      if [[ "${SERVICE_ACTIVE}" == "true" && -n "${CURRENT_SERVER_ADDR}" && "${CURRENT_SERVER_ADDR}" == "${SERVER_ADDR}" ]]; then
+        echo "$(msg port_owned_by_running_service)"
+      else
+        echo "$(msg port_in_use) ${SERVER_ADDR}" >&2
+        exit 1
+      fi
     fi
   fi
 fi
@@ -417,6 +448,7 @@ if [[ ! -x "${VENV_DIR}/bin/pre-commit" ]]; then
   fi
 fi
 
+if [[ "${CONFIG_APPLY_MODE}" != "keep_restart" ]]; then
 ${SUDO} tee "${ENV_FILE}" >/dev/null <<EOF
 SERVER_ADDR=${SERVER_ADDR}
 SERVER_VERSION=${SERVER_VERSION}
@@ -458,6 +490,7 @@ mount_root = "${MOUNT_ROOT}"
 env_file = "${ENV_FILE}"
 unit_file = "${SYSTEMD_UNIT}"
 EOF
+fi
 
 echo "$(msg creating_unit)"
 ${SUDO} tee "${SYSTEMD_UNIT}" >/dev/null <<EOF
@@ -482,10 +515,8 @@ echo "$(msg starting)"
 ${SUDO} systemctl daemon-reload
 ${SUDO} systemctl enable "${SERVICE_NAME}.service" >/dev/null
 if ${SUDO} systemctl is-active --quiet "${SERVICE_NAME}.service"; then
-  if [[ "${CONFIG_APPLY_MODE}" == "restart" ]]; then
+  if [[ "${CONFIG_APPLY_MODE}" == "update_restart" || "${CONFIG_APPLY_MODE}" == "keep_restart" ]]; then
     ${SUDO} systemctl restart "${SERVICE_NAME}.service"
-  elif [[ "${CONFIG_APPLY_MODE}" == "update" ]]; then
-    echo "$(msg restart_skipped)"
   else
     echo "$(msg ask_restart_running)"
     read -r USER_INPUT

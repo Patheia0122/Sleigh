@@ -84,6 +84,7 @@ print(read_result)
 - quality checks: run `pre-commit` when config exists; otherwise auto-detect language for fallback checks
 - `patch` must be unified diff text (not raw file content), e.g. with `*** Begin Patch` or `diff --git` headers
 - for create/delete/rename patches, include complete git metadata headers (e.g. `new file mode`, `deleted file mode`, `rename from`, `rename to`, `index`)
+- `write_mode=replace_file` is supported for full overwrite by raw source content
 
 ```python
 result = client.patch_workspace(
@@ -91,6 +92,16 @@ result = client.patch_workspace(
     sandbox_id=sandbox_id,
     sandbox_path="/app",
     patch="*** Begin Patch\n*** End Patch\n",
+)
+
+# Full overwrite mode (raw source content)
+rewrite_result = client.patch_workspace(
+    session_token=session_token,
+    sandbox_id=sandbox_id,
+    sandbox_path="/app",
+    write_mode="replace_file",
+    target_file_path="calculator.py",
+    content="print('hello from overwrite mode')\n",
 )
 ```
 

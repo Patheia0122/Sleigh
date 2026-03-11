@@ -100,6 +100,7 @@ docker compose up --build
 
 挂载写操作使用 `workspace_path`（相对 `SERVER_MOUNT_ALLOWED_ROOT`，允许带前导 `/`），服务端会在内部解析为宿主机绝对路径。  
 patch 写操作使用 `sandbox_path`（沙箱内绝对路径），服务端会将该目录导出到宿主机临时区执行 patch 后再同步回沙箱。
+patch 还支持 `write_mode=replace_file`，可直接用原始代码做整文件覆盖。
 patch 质量检查策略：有 `.pre-commit-config.yaml` 时跑 `pre-commit`，否则自动检测语言执行兜底检查。
 `patch` 参数必须是 unified diff 补丁文本（不是原始代码文本），支持 `*** Begin Patch` 或 `diff --git` 头格式。
 

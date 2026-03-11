@@ -33,3 +33,4 @@ AI coding focused tools are included:
 
 `create_sandbox` supports `confirm_low_memory` for low-memory confirmation flow.
 Use `create_session_token` first and reuse returned `session_token` in subsequent calls.
+`patch_workspace` supports two modes: `write_mode=patch` (git patch) and `write_mode=replace_file` (raw full overwrite).
