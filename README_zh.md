@@ -19,7 +19,7 @@ Sleigh 是面向 Agent 长周期、强状态、资源波动任务的弹性沙箱
 - 支持带权限边界的宿主机目录挂载
 - 支持单请求内的有序工作流批量执行
 - 支持沙箱内只读操作（命令白名单 + 截断分页）
-- 支持沙箱内AI编程的patch流水线（`git apply` + `pre-commit` + 可选 build）
+- 支持沙箱内 AI 编程写入流水线（context-edit/replace-file + `pre-commit` + 可选 build）
 - 统一使用 OTEL 做运行时可观测
 - 执行历史支持游标分页与 TTL 自动清理
 
@@ -95,14 +95,14 @@ docker compose up --build
 - `GET /sandboxes/{id}/memory/pressure` 查询内存压力
 - `POST /sandboxes/{id}/memory/expand` 请求扩容
 - `POST /sandboxes/{id}/ops/read` 沙箱读操作（同步，命令白名单）
-- `POST /sandboxes/{id}/ops/patch` 沙箱内AI编程 patch 操作（作用于其挂载工作区）
+- `POST /sandboxes/{id}/ops/code/write` 沙箱内 AI 编程写入操作
 - `GET /sessions/{sessionId}/exec-tasks` 执行历史分页
 
 挂载写操作使用 `workspace_path`（相对 `SERVER_MOUNT_ALLOWED_ROOT`，允许带前导 `/`），服务端会在内部解析为宿主机绝对路径。  
-patch 写操作使用 `sandbox_path`（沙箱内绝对路径），服务端会将该目录导出到宿主机临时区执行编辑后再同步回沙箱。
-`write_mode=context_edit`（默认）使用原始代码片段（`target_file_path`、`before_context`、`old_text`、`new_text`、`after_context`），由服务端完成定位与替换。
-patch 还支持 `write_mode=replace_file`，可直接用原始代码做整文件覆盖。
-patch 质量检查策略：有 `.pre-commit-config.yaml` 时跑 `pre-commit`，否则自动检测语言执行兜底检查。
+code_write 使用 `sandbox_path`（沙箱内目标文件绝对路径），服务端会将该文件所在目录导出到宿主机临时区执行编辑后再同步回沙箱。
+`write_mode=context_edit`（默认）使用原始代码片段（`before_context`、`old_text`、`new_text`、`after_context`），由服务端完成定位与替换。
+code_write 还支持 `write_mode=replace_file`，可直接用原始代码做整文件覆盖。
+code_write 质量检查策略：有 `.pre-commit-config.yaml` 时跑 `pre-commit`，否则自动检测语言执行兜底检查。
 
 受保护接口统一使用 `session_token`（请求体或 query）。  
 推荐流程：先调用 `POST /sessions/token` 获取令牌，再在同一任务/会话中复用该令牌。

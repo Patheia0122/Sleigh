@@ -77,35 +77,33 @@ print(read_result)
 
 ## 5. Patch API (Sandbox Semantic)
 
-`patch_workspace` targets:
+`code_write` targets:
 
-- `POST /sandboxes/{id}/ops/patch`
-- validates sandbox auth and targets directory inside sandbox filesystem
-- `sandbox_path` is required and must be an absolute directory path in sandbox
-- service exports sandbox dir to host temp workspace, applies edit, and syncs back
+- `POST /sandboxes/{id}/ops/code/write`
+- validates sandbox auth and targets file inside sandbox filesystem
+- `sandbox_path` is required and must be an absolute file path in sandbox
+- service exports target file directory to host temp workspace, applies edit, and syncs back
 - quality checks: run `pre-commit` when config exists; otherwise auto-detect language for fallback checks
-- `write_mode=context_edit` is default for partial edits; pass raw snippets with `target_file_path`, `old_text`, `new_text`, and optional `before_context`/`after_context`/`occurrence`
+- `write_mode=context_edit` is default for partial edits; pass raw snippets with `old_text`, `new_text`, and optional `before_context`/`after_context`/`occurrence`
 - `write_mode=replace_file` is supported for full overwrite by raw source content
 
 ```python
-result = client.patch_workspace(
+result = client.code_write(
     session_token=session_token,
     sandbox_id=sandbox_id,
-    sandbox_path="/app",
+    sandbox_path="/app/calculator.py",
     write_mode="context_edit",
-    target_file_path="calculator.py",
     before_context="    def multiply(self, a, b):\n        return a * b\n\n",
     old_text="    def multiply(self, a, b):\n        return a * b\n",
     new_text="    def multiply(self, a, b):\n        return a * b\n\n    def sqrt(self, a):\n        if a < 0:\n            raise ValueError('Cannot sqrt negative number!')\n        return a ** 0.5\n",
 )
 
 # Full overwrite mode (raw source content)
-rewrite_result = client.patch_workspace(
+rewrite_result = client.code_write(
     session_token=session_token,
     sandbox_id=sandbox_id,
-    sandbox_path="/app",
+    sandbox_path="/app/calculator.py",
     write_mode="replace_file",
-    target_file_path="calculator.py",
     content="print('hello from overwrite mode')\n",
 )
 ```

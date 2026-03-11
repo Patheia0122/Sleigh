@@ -60,7 +60,7 @@ def get_sleigh_runtime_tool() -> Any | None:
         description = (
             "Sleigh runtime unified tool. Use action to call sandbox APIs "
             "(create/list/get/delete sandbox, exec command, snapshot, mount, memory, history, "
-            "run_workflow, read_sandbox, patch_workspace). "
+            "run_workflow, read_sandbox, code_write). "
             "session_token is required and should usually use current session/thread id."
         )
         from langchain_core.tools import StructuredTool

@@ -134,11 +134,10 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         )
 
     @mcp.tool()
-    def patch_workspace(
+    def code_write(
         session_token: str,
         sandbox_id: str,
         sandbox_path: str,
-        target_file_path: str,
         old_text: str | None = None,
         new_text: str | None = None,
         before_context: str | None = None,
@@ -151,11 +150,10 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         max_output_bytes: int | None = None,
         max_lines: int | None = None,
     ):
-        return client.patch_workspace(
+        return client.code_write(
             session_token=session_token,
             sandbox_id=sandbox_id,
             sandbox_path=sandbox_path,
-            target_file_path=target_file_path,
             old_text=old_text,
             new_text=new_text,
             before_context=before_context,

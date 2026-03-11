@@ -97,11 +97,10 @@ type readOpResponse struct {
 	NextOffset   int64  `json:"next_offset,omitempty"`
 }
 
-type patchOpRequest struct {
+type codeWriteRequest struct {
 	SessionToken   string `json:"session_token"`
 	SandboxPath    string `json:"sandbox_path"`
 	WriteMode      string `json:"write_mode,omitempty"`
-	TargetFilePath string `json:"target_file_path,omitempty"`
 	BeforeContext  string `json:"before_context,omitempty"`
 	OldText        string `json:"old_text,omitempty"`
 	NewText        string `json:"new_text,omitempty"`
@@ -114,7 +113,7 @@ type patchOpRequest struct {
 	MaxLines       int    `json:"max_lines,omitempty"`
 }
 
-type patchOpResponse struct {
+type codeWriteResponse struct {
 	Status       string   `json:"status"`
 	DurationMS   int64    `json:"duration_ms"`
 	TimedOut     bool     `json:"timed_out"`
@@ -187,7 +186,7 @@ func NewHandler(cfg config.Config, service *sandbox.Service, monitorService *mon
 	mux.HandleFunc("POST /sandboxes/{id}/mounts", router.mountPath)
 	mux.HandleFunc("DELETE /sandboxes/{id}/mounts/{mountId}", router.unmountPath)
 	mux.HandleFunc("POST /sandboxes/{id}/ops/read", router.readOp)
-	mux.HandleFunc("POST /sandboxes/{id}/ops/patch", router.patchOp)
+	mux.HandleFunc("POST /sandboxes/{id}/ops/code/write", router.codeWrite)
 	mux.HandleFunc("POST /workflow/run", router.runWorkflow)
 	mux.HandleFunc("GET /sessions/{sessionId}/exec-tasks", router.listSessionExecTasks)
 	mux.HandleFunc("POST /maintenance/exec-tasks/cleanup", router.cleanupExecTasks)
@@ -866,8 +865,8 @@ func (r *Router) readOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	writeJSON(w, stdhttp.StatusOK, resp)
 }
 
-func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
-	var body patchOpRequest
+func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
+	var body codeWriteRequest
 	if err := decodeJSON(req, &body); err != nil {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
@@ -885,18 +884,15 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	sandboxPath, err := normalizeSandboxPatchPath(body.SandboxPath)
+	sandboxFilePath, err := normalizeSandboxCodePath(body.SandboxPath)
 	if err != nil {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
+	sandboxDirPath := filepath.Dir(sandboxFilePath)
 	writeMode, err := normalizePatchWriteMode(body.WriteMode)
 	if err != nil {
 		writeError(w, stdhttp.StatusBadRequest, err)
-		return
-	}
-	if strings.TrimSpace(body.TargetFilePath) == "" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("target_file_path is required"))
 		return
 	}
 	if writeMode == "replace_file" && strings.TrimSpace(body.Content) == "" {
@@ -932,7 +928,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(req.Context(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
-	workDir, err := os.MkdirTemp("", "sleigh-sbx-patch-*")
+	workDir, err := os.MkdirTemp("", "sleigh-sbx-code-write-*")
 	if err != nil {
 		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create temp workspace: %w", err))
 		return
@@ -945,11 +941,11 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
-	ensureOut, ensureErr := ensureSandboxDirectory(runCtx, sandboxID, sandboxPath)
+	ensureOut, ensureErr := ensureSandboxDirectory(runCtx, sandboxID, sandboxDirPath)
 	if ensureErr != nil {
 		stdout, omittedOut, truncOut := applyOutputLimits(ensureOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(ensureOut.stderr, maxOutputBytes, maxLines)
-		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+		writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
 			Status:       "error",
 			DurationMS:   time.Since(started).Milliseconds(),
 			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -962,11 +958,11 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		})
 		return
 	}
-	copyOut, copyErr := copySandboxDirectoryToHost(runCtx, sandboxID, sandboxPath, cwd)
+	copyOut, copyErr := copySandboxDirectoryToHost(runCtx, sandboxID, sandboxDirPath, cwd)
 	if copyErr != nil {
 		stdout, omittedOut, truncOut := applyOutputLimits(copyOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(copyOut.stderr, maxOutputBytes, maxLines)
-		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+		writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
 			Status:       "error",
 			DurationMS:   time.Since(started).Milliseconds(),
 			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -987,8 +983,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		var targetFile string
 		targetFile, editOut, editErr = applyContextEditInWorkspace(
 			cwd,
-			sandboxPath,
-			body.TargetFilePath,
+			sandboxFilePath,
 			body.BeforeContext,
 			body.OldText,
 			body.NewText,
@@ -998,7 +993,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		if editErr != nil {
 			stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
 			stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
-			writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+			writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
 				Status:       "error",
 				DurationMS:   time.Since(started).Milliseconds(),
 				TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -1014,9 +1009,9 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		appliedFiles = []string{targetFile}
 	} else {
 		var targetFile string
-		targetFile, err = rewriteFileInWorkspace(cwd, sandboxPath, body.TargetFilePath, body.Content)
+		targetFile, err = rewriteFileInWorkspace(cwd, sandboxFilePath, body.Content)
 		if err != nil {
-			writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+			writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
 				Status:      "error",
 				DurationMS:  time.Since(started).Milliseconds(),
 				TimedOut:    errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -1029,7 +1024,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	}
 	stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
 	stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
-	resp := patchOpResponse{
+	resp := codeWriteResponse{
 		Status:       "ok",
 		DurationMS:   time.Since(started).Milliseconds(),
 		TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -1050,14 +1045,14 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		resp.Status = "error"
-		resp.Error = "patch operation timed out"
+		resp.Error = "code_write operation timed out"
 		writeJSON(w, stdhttp.StatusOK, resp)
 		return
 	}
-	syncOut, syncErr := copyHostDirectoryToSandbox(runCtx, sandboxID, sandboxPath, cwd)
+	syncOut, syncErr := copyHostDirectoryToSandbox(runCtx, sandboxID, sandboxDirPath, cwd)
 	if syncErr != nil {
 		resp.Status = "error"
-		resp.Error = "copy patched files back to sandbox failed"
+		resp.Error = "copy code changes back to sandbox failed"
 		combinedStdout := editOut.stdout + syncOut.stdout
 		combinedStderr := editOut.stderr + syncOut.stderr
 		stdout, omittedOut, truncOut := applyOutputLimits(combinedStdout, maxOutputBytes, maxLines)
@@ -1553,19 +1548,19 @@ func runGitApplyCommand(ctx context.Context, cwd string, args ...string) (comman
 	return runCommand(ctx, "", "git", append([]string{"-C", cwd}, args...)...)
 }
 
-func normalizeSandboxPatchPath(raw string) (string, error) {
+func normalizeSandboxCodePath(raw string) (string, error) {
 	path := filepath.Clean(strings.TrimSpace(raw))
 	if path == "." || path == "" {
 		return "", errors.New("sandbox_path is required")
 	}
 	if !filepath.IsAbs(path) {
-		return "", errors.New("sandbox_path must be an absolute path inside sandbox")
+		return "", errors.New("sandbox_path must be an absolute file path inside sandbox")
 	}
 	if path == "/" {
 		return "", errors.New("sandbox_path cannot be root")
 	}
 	if strings.HasPrefix(path, "/proc") || strings.HasPrefix(path, "/sys") || strings.HasPrefix(path, "/dev") {
-		return "", errors.New("sandbox_path is not writable target")
+		return "", errors.New("sandbox_path is not writable")
 	}
 	return path, nil
 }
@@ -1582,10 +1577,10 @@ func normalizePatchWriteMode(raw string) (string, error) {
 	}
 }
 
-func rewriteFileInWorkspace(cwd, sandboxPath, targetFilePath, content string) (string, error) {
-	relativeTarget, err := resolveTargetRelativePath(sandboxPath, targetFilePath)
+func rewriteFileInWorkspace(cwd, sandboxFilePath, content string) (string, error) {
+	relativeTarget, err := resolveTargetRelativePath(sandboxFilePath)
 	if err != nil {
-		return "", fmt.Errorf("invalid target_file_path for write_mode=replace_file: %w", err)
+		return "", fmt.Errorf("invalid sandbox_path for write_mode=replace_file: %w", err)
 	}
 	localTarget := filepath.Join(cwd, relativeTarget)
 	if err := os.MkdirAll(filepath.Dir(localTarget), 0o755); err != nil {
@@ -1598,10 +1593,9 @@ func rewriteFileInWorkspace(cwd, sandboxPath, targetFilePath, content string) (s
 }
 
 func applyContextEditInWorkspace(
-	cwd, sandboxPath, targetFilePath, beforeContext, oldText, newText, afterContext string,
-	occurrence int,
+	cwd, sandboxFilePath, beforeContext, oldText, newText, afterContext string, occurrence int,
 ) (string, commandOutput, error) {
-	relativeTarget, err := resolveTargetRelativePath(sandboxPath, targetFilePath)
+	relativeTarget, err := resolveTargetRelativePath(sandboxFilePath)
 	if err != nil {
 		return "", commandOutput{}, err
 	}
@@ -1609,7 +1603,7 @@ func applyContextEditInWorkspace(
 	contentBytes, err := os.ReadFile(localTarget)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", commandOutput{}, errors.New("context_edit no_match: target_file_path not found under sandbox_path")
+			return "", commandOutput{}, errors.New("context_edit no_match: sandbox_path not found")
 		}
 		return "", commandOutput{}, fmt.Errorf("read target file failed: %w", err)
 	}
@@ -1643,30 +1637,17 @@ func applyContextEditInWorkspace(
 	}, nil
 }
 
-func resolveTargetRelativePath(sandboxPath, targetFilePath string) (string, error) {
-	rawTarget := strings.TrimSpace(targetFilePath)
-	if rawTarget == "" {
-		return "", errors.New("target_file_path is required")
+func resolveTargetRelativePath(sandboxFilePath string) (string, error) {
+	cleanTarget := filepath.Clean(strings.TrimSpace(sandboxFilePath))
+	if cleanTarget == "." || cleanTarget == "" {
+		return "", errors.New("sandbox_path is required")
 	}
-	var relativeTarget string
-	if filepath.IsAbs(rawTarget) {
-		cleanSandbox := filepath.Clean(sandboxPath)
-		cleanTarget := filepath.Clean(rawTarget)
-		if cleanTarget == cleanSandbox {
-			return "", errors.New("target_file_path must be a file path, not sandbox_path itself")
-		}
-		if !strings.HasPrefix(cleanTarget, cleanSandbox+string(filepath.Separator)) {
-			return "", errors.New("target_file_path must be inside sandbox_path")
-		}
-		relativeTarget = strings.TrimPrefix(cleanTarget, cleanSandbox+string(filepath.Separator))
-	} else {
-		relativeTarget = filepath.Clean(rawTarget)
-	}
+	relativeTarget := filepath.Base(cleanTarget)
 	if relativeTarget == "." || relativeTarget == "" {
-		return "", errors.New("target_file_path must be a file path")
+		return "", errors.New("sandbox_path must point to a file")
 	}
-	if strings.HasPrefix(relativeTarget, ".."+string(filepath.Separator)) || relativeTarget == ".." {
-		return "", errors.New("target_file_path cannot escape sandbox_path")
+	if relativeTarget == "/" {
+		return "", errors.New("sandbox_path must point to a file")
 	}
 	return relativeTarget, nil
 }

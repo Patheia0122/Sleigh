@@ -33,7 +33,7 @@ class SleighToolInput(BaseModel):
         "list_session_exec_tasks",
         "run_workflow",
         "read_sandbox",
-        "patch_workspace",
+        "code_write",
     ] = Field(..., description="Runtime action name to execute.")
     sandbox_id: str | None = Field(None, description="Sandbox identifier.")
     snapshot_id: str | None = Field(None, description="Snapshot identifier.")
@@ -79,11 +79,7 @@ class SleighToolInput(BaseModel):
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
     write_mode: Literal["context_edit", "replace_file"] | None = Field(
         None,
-        description="patch_workspace mode: 'context_edit' for server-side context locate+replace, 'replace_file' for full file overwrite.",
-    )
-    target_file_path: str | None = Field(
-        None,
-        description="Target file path for patch_workspace (absolute in sandbox or relative to sandbox_path). Required for context_edit and replace_file.",
+        description="code_write mode: 'context_edit' for server-side context locate+replace, 'replace_file' for full file overwrite.",
     )
     before_context: str | None = Field(
         None,
@@ -112,16 +108,16 @@ class SleighToolInput(BaseModel):
     )
     sandbox_path: str | None = Field(
         None,
-        description="Absolute target directory path inside sandbox for patch_workspace.",
+        description="Absolute target file path inside sandbox for code_write.",
     )
     build_language: str | None = Field(
         None,
-        description="Optional build language for patch_workspace (e.g. go/python/node/rust/java).",
+        description="Optional build language for code_write (e.g. go/python/node/rust/java).",
     )
 
     @model_validator(mode="after")
     def _validate_action_requirements(self):
-        if self.action != "patch_workspace":
+        if self.action != "code_write":
             if self.action == "run_workflow":
                 if not self.workflow_steps:
                     raise ValueError("workflow_steps is required when action=run_workflow")
@@ -134,18 +130,18 @@ class SleighToolInput(BaseModel):
             return self
         mode = (self.write_mode or "context_edit").strip()
         if mode == "context_edit":
-            if self.target_file_path is None or self.target_file_path.strip() == "":
-                raise ValueError("target_file_path is required when action=patch_workspace and write_mode=context_edit")
+            if self.sandbox_path is None or self.sandbox_path.strip() == "":
+                raise ValueError("sandbox_path is required when action=code_write and write_mode=context_edit")
             if self.old_text is None or self.old_text.strip() == "":
-                raise ValueError("old_text is required when action=patch_workspace and write_mode=context_edit")
+                raise ValueError("old_text is required when action=code_write and write_mode=context_edit")
             if self.new_text is None or self.new_text.strip() == "":
-                raise ValueError("new_text is required when action=patch_workspace and write_mode=context_edit")
+                raise ValueError("new_text is required when action=code_write and write_mode=context_edit")
             return self
         if mode == "replace_file":
-            if self.target_file_path is None or self.target_file_path.strip() == "":
-                raise ValueError("target_file_path is required when action=patch_workspace and write_mode=replace_file")
+            if self.sandbox_path is None or self.sandbox_path.strip() == "":
+                raise ValueError("sandbox_path is required when action=code_write and write_mode=replace_file")
             if self.content is None:
-                raise ValueError("content is required when action=patch_workspace and write_mode=replace_file")
+                raise ValueError("content is required when action=code_write and write_mode=replace_file")
             return self
         raise ValueError("write_mode must be one of: context_edit, replace_file")
 
@@ -256,23 +252,12 @@ class SleighLangChainClient:
                 max_lines=data.max_lines,
                 output_offset=data.output_offset,
             )
-        if action == "patch_workspace":
+        if action == "code_write":
             mode = (data.write_mode or "context_edit").strip()
-            if mode == "context_edit":
-                _require(data.target_file_path, "target_file_path")
-                _require(data.old_text, "old_text")
-                _require(data.new_text, "new_text")
-            elif mode == "replace_file":
-                _require(data.target_file_path, "target_file_path")
-                if data.content is None:
-                    raise ValueError("content is required for write_mode=replace_file")
-            else:
-                raise ValueError("write_mode must be one of: context_edit, replace_file")
-            return self.client.patch_workspace(
+            return self.client.code_write(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
                 sandbox_path=_require(data.sandbox_path, "sandbox_path"),
-                target_file_path=_require(data.target_file_path, "target_file_path"),
                 old_text=data.old_text,
                 new_text=data.new_text,
                 before_context=data.before_context,
@@ -307,8 +292,8 @@ class SleighLangChainClient:
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
                 "First call action=create_session_token, then pass session_token to other actions. "
                 "For run_workflow, every step must include sandbox_id. "
-                "For patch_workspace, default to write_mode=context_edit with before/old/new/after raw code snippets; "
-                "use write_mode=replace_file with target_file_path/content when full overwrite is needed."
+                "For code_write, default to write_mode=context_edit with before/old/new/after raw code snippets; "
+                "use write_mode=replace_file with sandbox_path/content when full overwrite is needed."
             )
 
         def runtime_tool(**kwargs) -> str:

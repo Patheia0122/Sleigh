@@ -283,13 +283,12 @@ class SleighClient:
             body["output_offset"] = output_offset
         return self._request("POST", f"/sandboxes/{sandbox_id}/ops/read", json_body=body)
 
-    def patch_workspace(
+    def code_write(
         self,
         *,
         session_token: str,
         sandbox_id: str,
         sandbox_path: str,
-        target_file_path: str,
         old_text: str | None = None,
         new_text: str | None = None,
         before_context: str | None = None,
@@ -305,7 +304,6 @@ class SleighClient:
         body: dict[str, Any] = {
             "session_token": session_token,
             "sandbox_path": sandbox_path,
-            "target_file_path": target_file_path,
         }
         if old_text is not None:
             body["old_text"] = old_text
@@ -329,4 +327,4 @@ class SleighClient:
             body["max_output_bytes"] = max_output_bytes
         if max_lines is not None:
             body["max_lines"] = max_lines
-        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/patch", json_body=body)
+        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/code/write", json_body=body)

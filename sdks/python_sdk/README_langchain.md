@@ -23,13 +23,13 @@ AI coding related actions included in `SleighToolInput.action`:
 - `create_session_token`
 - `run_workflow`
 - `read_sandbox`
-- `patch_workspace`
+- `code_write`
 
 Call `create_session_token` first, then pass the returned `session_token` to other actions.
 For `run_workflow`, every step in `workflow_steps` must include `sandbox_id` (SDK enforces this before request).
 
-For `patch_workspace`, default to `write_mode=context_edit`: provide `target_file_path`, `old_text`, `new_text`, and optionally `before_context`/`after_context`/`occurrence`.
+For `code_write`, default to `write_mode=context_edit`: provide `sandbox_path` (absolute file path), `old_text`, `new_text`, and optionally `before_context`/`after_context`/`occurrence`.
 The server performs snippet locate+replace and returns semantic errors like `no_match` / `ambiguous_match`.
-If full overwrite is intended, use `write_mode=replace_file` with `target_file_path` and raw `content`.
+If full overwrite is intended, use `write_mode=replace_file` with `sandbox_path` and raw `content`.
 
 When creating sandbox under low memory pressure, pass `confirm_low_memory=True`.
