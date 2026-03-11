@@ -7,6 +7,8 @@ SERVICE_NAME="sleigh"
 DEFAULT_MOUNT_ROOT="${BASE_DIR}/mount-root-$(date +%Y%m%d)-$(hostname -s)-sleigh"
 INSTALL_BIN="${BASE_DIR}/bin/sleigh-server"
 ENV_FILE="${BASE_DIR}/config/sleigh.env"
+INSTALL_STATE_FILE="${BASE_DIR}/config/install-state.toml"
+VENV_DIR="${BASE_DIR}/.venv"
 SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 DEFAULT_SERVER_ADDR=":8080"
 DEFAULT_SERVER_VERSION="dev"
@@ -57,8 +59,15 @@ msg() {
   if [[ "${LOCALE}" == "zh" ]]; then
     case "${key}" in
       title) echo "=== Sleigh 安装向导（宿主机服务模式）===" ;;
-      check_deps) echo "检查依赖（go、docker、systemctl）..." ;;
+      check_deps) echo "检查依赖（go、docker、systemctl、python3）..." ;;
       deps_missing) echo "缺少依赖，请先安装后重试：" ;;
+      installing_precommit) echo "安装 pre-commit（服务端 patch 质量检查依赖，使用独立虚拟环境）..." ;;
+      creating_venv) echo "创建 Python 虚拟环境（${VENV_DIR}）..." ;;
+      venv_create_failed) echo "错误: 创建 Python 虚拟环境失败，请确认已安装 python3-venv。" ;;
+      precommit_install_failed) echo "错误: pre-commit 安装失败。请检查服务端网络、pip 源或代理配置后重试。" ;;
+      existing_config_detected) echo "检测到已有安装配置。" ;;
+      ask_config_apply_mode) echo "请选择配置应用方式: [1] 仅更新配置(不重启) [2] 更新并重启服务 [3] 取消安装" ;;
+      config_apply_cancelled) echo "已取消安装，不修改现有配置。" ;;
       ask_mount) echo "请输入挂载白名单根目录（回车使用默认目录）:" ;;
       ask_server_addr) echo "请输入服务监听地址（例如 :8080、0.0.0.0:8080）:" ;;
       ask_server_version) echo "请输入服务版本标识（用于诊断展示）:" ;;
@@ -102,8 +111,15 @@ msg() {
   else
     case "${key}" in
       title) echo "=== Sleigh Installer (Host Service Mode) ===" ;;
-      check_deps) echo "Checking dependencies (go, docker, systemctl)..." ;;
+      check_deps) echo "Checking dependencies (go, docker, systemctl, python3)..." ;;
       deps_missing) echo "Missing required dependencies. Please install first:" ;;
+      installing_precommit) echo "Installing pre-commit in isolated virtual environment (required by server-side patch quality checks)..." ;;
+      creating_venv) echo "Creating Python virtual environment (${VENV_DIR})..." ;;
+      venv_create_failed) echo "Error: failed to create Python virtual environment. Please install python3-venv." ;;
+      precommit_install_failed) echo "Error: failed to install pre-commit. Check server network, pip source, or proxy settings and retry." ;;
+      existing_config_detected) echo "Detected existing installation config." ;;
+      ask_config_apply_mode) echo "Choose config apply mode: [1] update config only (no restart) [2] update and restart service [3] cancel install" ;;
+      config_apply_cancelled) echo "Install cancelled. Existing config is unchanged." ;;
       ask_mount) echo "Enter mount allowlist root (press Enter for default):" ;;
       ask_server_addr) echo "Enter server listen address (e.g. :8080, 0.0.0.0:8080):" ;;
       ask_server_version) echo "Enter server version label (for diagnostics):" ;;
@@ -195,7 +211,7 @@ echo "$(msg title)"
 echo "$(msg check_deps)"
 
 MISSING=()
-for dep in docker systemctl; do
+for dep in docker systemctl python3; do
   if ! command -v "${dep}" >/dev/null 2>&1; then
     MISSING+=("${dep}")
   fi
@@ -206,6 +222,30 @@ fi
 if [[ "${#MISSING[@]}" -gt 0 ]]; then
   echo "$(msg deps_missing) ${MISSING[*]}" >&2
   exit 1
+fi
+
+CONFIG_APPLY_MODE="auto"
+if [[ -f "${ENV_FILE}" || -f "${INSTALL_STATE_FILE}" ]]; then
+  echo "$(msg existing_config_detected)"
+  echo "$(msg ask_config_apply_mode)"
+  read -r USER_INPUT
+  APPLY_CHOICE="$(trim "${USER_INPUT}")"
+  case "${APPLY_CHOICE}" in
+    1|"")
+      CONFIG_APPLY_MODE="update"
+      ;;
+    2)
+      CONFIG_APPLY_MODE="restart"
+      ;;
+    3)
+      echo "$(msg config_apply_cancelled)"
+      exit 0
+      ;;
+    *)
+      echo "$(msg config_apply_cancelled)"
+      exit 1
+      ;;
+  esac
 fi
 
 echo "$(msg default_dir) ${DEFAULT_MOUNT_ROOT}"
@@ -359,6 +399,24 @@ ${SUDO} mkdir -p "${BASE_DIR}/bin" "${BASE_DIR}/config" "${BASE_DIR}/data/snapsh
 ${SUDO} install -m 0755 /tmp/sleigh-server "${INSTALL_BIN}"
 rm -f /tmp/sleigh-server
 
+if [[ ! -x "${VENV_DIR}/bin/pre-commit" ]]; then
+  if ! python3 -m venv --help >/dev/null 2>&1; then
+    echo "$(msg venv_create_failed)" >&2
+    exit 1
+  fi
+  echo "$(msg creating_venv)"
+  ${SUDO} rm -rf "${VENV_DIR}"
+  if ! ${SUDO} python3 -m venv "${VENV_DIR}"; then
+    echo "$(msg venv_create_failed)" >&2
+    exit 1
+  fi
+  echo "$(msg installing_precommit)"
+  if ! ${SUDO} "${VENV_DIR}/bin/pip" install --upgrade pip pre-commit; then
+    echo "$(msg precommit_install_failed)" >&2
+    exit 1
+  fi
+fi
+
 ${SUDO} tee "${ENV_FILE}" >/dev/null <<EOF
 SERVER_ADDR=${SERVER_ADDR}
 SERVER_VERSION=${SERVER_VERSION}
@@ -378,6 +436,27 @@ CURSOR_TOKEN_TTL_SECONDS=${DEFAULT_CURSOR_TOKEN_TTL_SECONDS}
 EXEC_CLEANUP_INTERVAL_SECONDS=${DEFAULT_EXEC_CLEANUP_INTERVAL_SECONDS}
 SERVER_MOUNT_ALLOWED_ROOT=${MOUNT_ROOT}
 SERVER_OTEL_EXPORTER_OTLP_ENDPOINT=${SERVER_OTEL_EXPORTER_OTLP_ENDPOINT}
+PRE_COMMIT_BIN=${VENV_DIR}/bin/pre-commit
+EOF
+
+INSTALL_UPDATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+FIRST_INSTALLED_AT="${INSTALL_UPDATED_AT}"
+if [[ -f "${INSTALL_STATE_FILE}" ]]; then
+  EXISTING_FIRST_INSTALLED_AT="$(sed -n 's/^first_installed_at = "\(.*\)"/\1/p' "${INSTALL_STATE_FILE}" | sed -n '1p')"
+  if [[ -n "${EXISTING_FIRST_INSTALLED_AT}" ]]; then
+    FIRST_INSTALLED_AT="${EXISTING_FIRST_INSTALLED_AT}"
+  fi
+fi
+
+${SUDO} tee "${INSTALL_STATE_FILE}" >/dev/null <<EOF
+# Sleigh installer state (auto-generated)
+service_name = "${SERVICE_NAME}"
+first_installed_at = "${FIRST_INSTALLED_AT}"
+last_updated_at = "${INSTALL_UPDATED_AT}"
+server_addr = "${SERVER_ADDR}"
+mount_root = "${MOUNT_ROOT}"
+env_file = "${ENV_FILE}"
+unit_file = "${SYSTEMD_UNIT}"
 EOF
 
 echo "$(msg creating_unit)"
@@ -403,13 +482,19 @@ echo "$(msg starting)"
 ${SUDO} systemctl daemon-reload
 ${SUDO} systemctl enable "${SERVICE_NAME}.service" >/dev/null
 if ${SUDO} systemctl is-active --quiet "${SERVICE_NAME}.service"; then
-  echo "$(msg ask_restart_running)"
-  read -r USER_INPUT
-  RESTART_CHOICE="$(echo "${USER_INPUT}" | tr '[:upper:]' '[:lower:]' | xargs)"
-  if [[ "${RESTART_CHOICE}" == "y" || "${RESTART_CHOICE}" == "yes" ]]; then
+  if [[ "${CONFIG_APPLY_MODE}" == "restart" ]]; then
     ${SUDO} systemctl restart "${SERVICE_NAME}.service"
-  else
+  elif [[ "${CONFIG_APPLY_MODE}" == "update" ]]; then
     echo "$(msg restart_skipped)"
+  else
+    echo "$(msg ask_restart_running)"
+    read -r USER_INPUT
+    RESTART_CHOICE="$(echo "${USER_INPUT}" | tr '[:upper:]' '[:lower:]' | xargs)"
+    if [[ "${RESTART_CHOICE}" == "y" || "${RESTART_CHOICE}" == "yes" ]]; then
+      ${SUDO} systemctl restart "${SERVICE_NAME}.service"
+    else
+      echo "$(msg restart_skipped)"
+    fi
   fi
 else
   ${SUDO} systemctl start "${SERVICE_NAME}.service"

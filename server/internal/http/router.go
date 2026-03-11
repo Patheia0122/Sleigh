@@ -1031,7 +1031,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 		if qualityErr != nil {
 			resp.Status = "error"
-			resp.Error = fmt.Sprintf("language quality checks failed for %q", detectedLanguage)
+			resp.Error = formatLanguageCheckError(detectedLanguage, qualityErr, runCtx.Err())
 			resp.BuildStatus = "not_run"
 		}
 	}
@@ -1046,7 +1046,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			buildOutput, buildErr = runContainerBuild(runCtx, cwd, buildLang)
 			if buildErr != nil {
 				resp.Status = "error"
-				resp.Error = fmt.Sprintf("build failed for language %q", buildLang)
+				resp.Error = formatBuildError(buildLang, buildErr, runCtx.Err())
 				resp.BuildStatus = "failed"
 			} else {
 				resp.BuildStatus = "passed"
@@ -1658,8 +1658,11 @@ func runLanguageQualityChecks(ctx context.Context, cwd string, language string) 
 	if !ok {
 		return commandOutput{}, nil
 	}
-	_, _ = runCommand(ctx, "", "docker", "pull", profile.image)
-	return runCommand(
+	pullOut, pullErr := runCommand(ctx, "", "docker", "pull", profile.image)
+	if pullErr != nil {
+		return pullOut, fmt.Errorf("docker pull failed for quality checks image %q: %w", profile.image, pullErr)
+	}
+	runOut, runErr := runCommand(
 		ctx,
 		"",
 		"docker",
@@ -1674,6 +1677,7 @@ func runLanguageQualityChecks(ctx context.Context, cwd string, language string) 
 		"-lc",
 		profile.command,
 	)
+	return combineCommandOutputs(pullOut, runOut), runErr
 }
 
 func runPreCommit(ctx context.Context, cwd string, files []string) (commandOutput, error) {
@@ -1682,7 +1686,11 @@ func runPreCommit(ctx context.Context, cwd string, files []string) (commandOutpu
 		args = append(args, "--files")
 		args = append(args, files...)
 	}
-	return runCommand(ctx, cwd, "pre-commit", args...)
+	preCommitBin := strings.TrimSpace(os.Getenv("PRE_COMMIT_BIN"))
+	if preCommitBin == "" {
+		preCommitBin = "pre-commit"
+	}
+	return runCommand(ctx, cwd, preCommitBin, args...)
 }
 
 func classifyPreCommitIssues(stderr string, stdout string, maxItems int) ([]string, []string) {
@@ -1769,8 +1777,11 @@ func runContainerBuild(ctx context.Context, cwd string, language string) (comman
 	if !ok {
 		return commandOutput{}, fmt.Errorf("unsupported build language: %s", language)
 	}
-	_, _ = runCommand(ctx, "", "docker", "pull", profile.image)
-	return runCommand(
+	pullOut, pullErr := runCommand(ctx, "", "docker", "pull", profile.image)
+	if pullErr != nil {
+		return pullOut, fmt.Errorf("docker pull failed for build image %q: %w", profile.image, pullErr)
+	}
+	buildOut, buildErr := runCommand(
 		ctx,
 		"",
 		"docker",
@@ -1785,6 +1796,63 @@ func runContainerBuild(ctx context.Context, cwd string, language string) (comman
 		"-lc",
 		profile.command,
 	)
+	return combineCommandOutputs(pullOut, buildOut), buildErr
+}
+
+func combineCommandOutputs(parts ...commandOutput) commandOutput {
+	var out commandOutput
+	for _, part := range parts {
+		out.stdout += part.stdout
+		out.stderr += part.stderr
+	}
+	return out
+}
+
+func formatLanguageCheckError(language string, err error, ctxErr error) string {
+	if isNetworkUnreachableError(err) {
+		return fmt.Sprintf("language quality checks failed for %q: failed to download required Docker image or dependencies due to network issues. Check server Docker registry/mirror or proxy settings.", language)
+	}
+	if isTimeoutLikeError(err, ctxErr) {
+		return fmt.Sprintf("language quality checks timed out for %q: initial image/dependency download may take longer. Please retry later and check server logs.", language)
+	}
+	return fmt.Sprintf("language quality checks failed for %q", language)
+}
+
+func formatBuildError(language string, err error, ctxErr error) string {
+	if isNetworkUnreachableError(err) {
+		return fmt.Sprintf("build failed for language %q: failed to download build image or dependencies due to network issues. Check server Docker registry/mirror or proxy settings.", language)
+	}
+	if isTimeoutLikeError(err, ctxErr) {
+		return fmt.Sprintf("build timed out for language %q: initial image/dependency download may take longer. Please retry later and check server logs.", language)
+	}
+	return fmt.Sprintf("build failed for language %q", language)
+}
+
+func isTimeoutLikeError(err error, ctxErr error) bool {
+	if errors.Is(ctxErr, context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "timed out")
+}
+
+func isNetworkUnreachableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "temporary failure in name resolution") ||
+		strings.Contains(msg, "proxyconnect") ||
+		strings.Contains(msg, "tls handshake timeout") ||
+		strings.Contains(msg, "dial tcp")
 }
 
 func summarizeLines(lines []string, maxItems int) []string {
