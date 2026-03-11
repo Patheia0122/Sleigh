@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .client import SleighClient
 
@@ -83,7 +83,7 @@ class SleighToolInput(BaseModel):
     )
     target_file_path: str | None = Field(
         None,
-        description="Target file path for patch_workspace (absolute in sandbox or relative to sandbox_path).",
+        description="Target file path for patch_workspace (absolute in sandbox or relative to sandbox_path). Required for context_edit and replace_file.",
     )
     before_context: str | None = Field(
         None,
@@ -118,6 +118,27 @@ class SleighToolInput(BaseModel):
         None,
         description="Optional build language for patch_workspace (e.g. go/python/node/rust/java).",
     )
+
+    @model_validator(mode="after")
+    def _validate_action_requirements(self):
+        if self.action != "patch_workspace":
+            return self
+        mode = (self.write_mode or "context_edit").strip()
+        if mode == "context_edit":
+            if self.target_file_path is None or self.target_file_path.strip() == "":
+                raise ValueError("target_file_path is required when action=patch_workspace and write_mode=context_edit")
+            if self.old_text is None or self.old_text.strip() == "":
+                raise ValueError("old_text is required when action=patch_workspace and write_mode=context_edit")
+            if self.new_text is None or self.new_text.strip() == "":
+                raise ValueError("new_text is required when action=patch_workspace and write_mode=context_edit")
+            return self
+        if mode == "replace_file":
+            if self.target_file_path is None or self.target_file_path.strip() == "":
+                raise ValueError("target_file_path is required when action=patch_workspace and write_mode=replace_file")
+            if self.content is None:
+                raise ValueError("content is required when action=patch_workspace and write_mode=replace_file")
+            return self
+        raise ValueError("write_mode must be one of: context_edit, replace_file")
 
 
 class SleighLangChainClient:

@@ -1074,16 +1074,17 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	qualityErr := error(nil)
 	if hasPreCommitConfig(cwd) {
 		qualityOutput, qualityErr = runPreCommit(runCtx, cwd, appliedFiles)
-		resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 		if qualityErr != nil {
+			resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 			resp.Status = "error"
 			resp.Error = "pre-commit checks failed; fix issues and retry"
 			resp.BuildStatus = "not_run"
 		}
 	} else if detectedLanguage := detectWorkspaceLanguage(cwd, appliedFiles); detectedLanguage != "" {
 		qualityOutput, qualityErr = runLanguageQualityChecks(runCtx, cwd, detectedLanguage)
-		resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 		if qualityErr != nil {
+			resp.FormatIssues = []string{}
+			resp.LintIssues = []string{}
 			resp.Status = "error"
 			resp.Error = formatLanguageCheckError(detectedLanguage, qualityErr, runCtx.Err())
 			resp.BuildStatus = "not_run"
