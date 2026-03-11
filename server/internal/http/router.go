@@ -17,6 +17,7 @@ import (
 
 	"sleigh-runtime/server/internal/config"
 	appErr "sleigh-runtime/server/internal/errors"
+	"sleigh-runtime/server/internal/id"
 	"sleigh-runtime/server/internal/monitor"
 	"sleigh-runtime/server/internal/sandbox"
 )
@@ -32,6 +33,11 @@ type healthResponse struct {
 	Time        string `json:"time"`
 	Version     string `json:"version"`
 	SandboxKind string `json:"sandbox_kind"`
+}
+
+type sessionTokenResponse struct {
+	SessionToken string `json:"session_token"`
+	IssuedAt     string `json:"issued_at"`
 }
 
 type createSandboxRequest struct {
@@ -155,6 +161,7 @@ func NewHandler(cfg config.Config, service *sandbox.Service, monitorService *mon
 
 	mux := stdhttp.NewServeMux()
 	mux.HandleFunc("GET /healthz", router.healthz)
+	mux.HandleFunc("POST /sessions/token", router.createSessionToken)
 	mux.HandleFunc("GET /resources", router.getResources)
 	mux.HandleFunc("GET /diagnostics/oom", router.getOOMDiagnostics)
 	mux.HandleFunc("POST /sandboxes", router.createSandbox)
@@ -199,6 +206,18 @@ func (r *Router) healthz(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(stdhttp.StatusOK)
 	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (r *Router) createSessionToken(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+	token, err := id.New("sess_")
+	if err != nil {
+		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create session token failed: %w", err))
+		return
+	}
+	writeJSON(w, stdhttp.StatusCreated, sessionTokenResponse{
+		SessionToken: token,
+		IssuedAt:     time.Now().UTC().Format(time.RFC3339),
+	})
 }
 
 func (r *Router) getResources(w stdhttp.ResponseWriter, req *stdhttp.Request) {
@@ -962,7 +981,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			Truncated:    truncOut || truncErr,
 			Stdout:       stdout,
 			Stderr:       stderr,
-			Error:        "git apply --check failed: patch_text must be a unified diff patch (not raw source code). Include file headers such as '*** Begin Patch' or 'diff --git ...'.",
+			Error:        "git apply --check failed: patch_text must be a complete git patch (not raw source code). Use unified diff with headers such as '*** Begin Patch' or 'diff --git ...'; for new/delete/rename, include metadata like 'new file mode'/'deleted file mode'/'rename from'/'rename to' and 'index'.",
 			BuildStatus:  "not_run",
 			OmittedBytes: omittedOut + omittedErr,
 		})

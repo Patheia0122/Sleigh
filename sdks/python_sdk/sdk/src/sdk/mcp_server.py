@@ -15,6 +15,10 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
     mcp = FastMCP("sleigh-runtime")
 
     @mcp.tool()
+    def create_session_token():
+        return client.create_session_token()
+
+    @mcp.tool()
     def create_sandbox(
         session_token: str,
         image: str = "alpine:3.20",

@@ -26,8 +26,10 @@ mcp.run()
 
 AI coding focused tools are included:
 
+- `create_session_token`
 - `run_workflow`
 - `read_sandbox`
 - `patch_workspace`
 
 `create_sandbox` supports `confirm_low_memory` for low-memory confirmation flow.
+Use `create_session_token` first and reuse returned `session_token` in subsequent calls.

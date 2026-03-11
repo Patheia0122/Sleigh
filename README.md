@@ -87,6 +87,7 @@ docker compose up --build
 ## API Highlights
 
 - `POST /sandboxes` create sandbox
+- `POST /sessions/token` issue a server-generated session token
 - `GET /sandboxes` list sandboxes in current session
 - `POST /sandboxes/{id}/exec` execute command
 - `POST /workflow/run` run ordered workflow steps in one call
@@ -103,7 +104,8 @@ For patch writes, client input uses `sandbox_path` (absolute path inside sandbox
 Patch quality checks run `pre-commit` when `.pre-commit-config.yaml` exists; otherwise language-detected fallback checks are executed.
 The `patch` field must be unified diff text (not raw source code), using headers like `*** Begin Patch` or `diff --git`.
 
-All protected endpoints require `session_token` (body or query).
+All protected endpoints require `session_token` (body or query).  
+Recommended flow: first call `POST /sessions/token`, then reuse returned token for the whole task/session.
 
 Read/patch style endpoints return an AI-friendly envelope:
 

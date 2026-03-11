@@ -9,8 +9,12 @@ from .client import SleighClient
 
 
 class SleighToolInput(BaseModel):
-    session_token: str = Field(..., description="Session token (currently equal to session_id).")
+    session_token: str | None = Field(
+        None,
+        description="Session token. Call action=create_session_token first, then reuse returned token.",
+    )
     action: Literal[
+        "create_session_token",
         "create_sandbox",
         "list_sandboxes",
         "get_sandbox",
@@ -75,7 +79,11 @@ class SleighToolInput(BaseModel):
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
     patch_text: str | None = Field(
         None,
-        description="Unified diff patch text for patch_workspace (not raw source code).",
+        description=(
+            "Complete git patch text for patch_workspace (not raw source code). "
+            "Prefer full 'diff --git' format. For file creation/deletion/rename, include metadata "
+            "headers like 'new file mode'/'deleted file mode'/'rename from'/'rename to' and 'index'."
+        ),
     )
     sandbox_path: str | None = Field(
         None,
@@ -94,6 +102,10 @@ class SleighLangChainClient:
     def _dispatch(self, data: SleighToolInput) -> dict:
         action = data.action
         token = data.session_token
+
+        if action == "create_session_token":
+            return self.client.create_session_token()
+        token = _require(token, "session_token")
 
         if action == "create_sandbox":
             return self.client.create_sandbox(
@@ -220,7 +232,9 @@ class SleighLangChainClient:
             description = (
                 "Sleigh runtime unified tool. "
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
-                "session_token is required for session-scoped access control."
+                "First call action=create_session_token, then pass session_token to other actions. "
+                "For patch_workspace, provide complete git patch text (prefer full diff --git format), "
+                "not raw file content."
             )
 
         def runtime_tool(**kwargs) -> str:

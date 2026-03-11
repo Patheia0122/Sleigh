@@ -82,6 +82,9 @@ class SleighClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def create_session_token(self) -> dict[str, Any]:
+        return self._request("POST", "/sessions/token")
+
     def list_sandboxes(self, *, session_token: str) -> dict[str, Any]:
         return self._request("GET", "/sandboxes", query={"session_token": session_token})
 

@@ -30,7 +30,7 @@ pip install ".[mcp]"
 from sdk import SleighClient
 
 client = SleighClient(base_url="http://127.0.0.1:8080")
-session_token = "sess_demo"
+session_token = client.create_session_token()["session_token"]
 created = client.create_sandbox(session_token=session_token, image="alpine:3.20")
 sandbox_id = created["sandbox_id"]
 ```
@@ -83,6 +83,7 @@ print(read_result)
 - service exports sandbox dir to host temp workspace, applies patch, and syncs back
 - quality checks: run `pre-commit` when config exists; otherwise auto-detect language for fallback checks
 - `patch` must be unified diff text (not raw file content), e.g. with `*** Begin Patch` or `diff --git` headers
+- for create/delete/rename patches, include complete git metadata headers (e.g. `new file mode`, `deleted file mode`, `rename from`, `rename to`, `index`)
 
 ```python
 result = client.patch_workspace(
