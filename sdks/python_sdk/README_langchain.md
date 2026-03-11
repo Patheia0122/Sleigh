@@ -27,8 +27,8 @@ AI coding related actions included in `SleighToolInput.action`:
 
 Call `create_session_token` first, then pass the returned `session_token` to other actions.
 
-For `patch_workspace`, the agent should provide complete git patch text (prefer full `diff --git` format), not raw source code.
-For create/delete/rename operations, include metadata headers such as `new file mode`/`deleted file mode`/`rename from`/`rename to` and `index`.
+For `patch_workspace`, default to `write_mode=context_edit`: provide `target_file_path`, `old_text`, `new_text`, and optionally `before_context`/`after_context`/`occurrence`.
+The server performs snippet locate+replace and returns semantic errors like `no_match` / `ambiguous_match`.
 If full overwrite is intended, use `write_mode=replace_file` with `target_file_path` and raw `content`.
 
 When creating sandbox under low memory pressure, pass `confirm_low_memory=True`.

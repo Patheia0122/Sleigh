@@ -77,29 +77,42 @@ class SleighToolInput(BaseModel):
     max_output_bytes: int | None = Field(None, ge=1, le=1048576, description="Max captured bytes per stream.")
     max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
-    write_mode: Literal["patch", "replace_file"] | None = Field(
+    write_mode: Literal["context_edit", "replace_file"] | None = Field(
         None,
-        description="patch_workspace mode: 'patch' for git patch apply, 'replace_file' for full file overwrite.",
-    )
-    patch_text: str | None = Field(
-        None,
-        description=(
-            "Complete git patch text for patch_workspace (not raw source code). "
-            "Prefer full 'diff --git' format. For file creation/deletion/rename, include metadata "
-            "headers like 'new file mode'/'deleted file mode'/'rename from'/'rename to' and 'index'."
-        ),
-    )
-    sandbox_path: str | None = Field(
-        None,
-        description="Absolute target directory path inside sandbox for patch_workspace.",
+        description="patch_workspace mode: 'context_edit' for server-side context locate+replace, 'replace_file' for full file overwrite.",
     )
     target_file_path: str | None = Field(
         None,
-        description="For write_mode=replace_file: target file path to overwrite (absolute in sandbox or relative to sandbox_path).",
+        description="Target file path for patch_workspace (absolute in sandbox or relative to sandbox_path).",
+    )
+    before_context: str | None = Field(
+        None,
+        description="For context_edit: optional lines before old_text to help unique locate.",
+    )
+    old_text: str | None = Field(
+        None,
+        description="For context_edit: original snippet to replace (required).",
+    )
+    new_text: str | None = Field(
+        None,
+        description="For context_edit: replacement snippet (required).",
+    )
+    after_context: str | None = Field(
+        None,
+        description="For context_edit: optional lines after old_text to help unique locate.",
+    )
+    occurrence: int | None = Field(
+        None,
+        ge=1,
+        description="For context_edit: 1-based match index when snippet appears multiple times.",
     )
     content: str | None = Field(
         None,
         description="For write_mode=replace_file: raw file content to write.",
+    )
+    sandbox_path: str | None = Field(
+        None,
+        description="Absolute target directory path inside sandbox for patch_workspace.",
     )
     build_language: str | None = Field(
         None,
@@ -214,22 +227,28 @@ class SleighLangChainClient:
                 output_offset=data.output_offset,
             )
         if action == "patch_workspace":
-            mode = (data.write_mode or "patch").strip()
-            if mode == "patch":
-                _require(data.patch_text, "patch_text")
+            mode = (data.write_mode or "context_edit").strip()
+            if mode == "context_edit":
+                _require(data.target_file_path, "target_file_path")
+                _require(data.old_text, "old_text")
+                _require(data.new_text, "new_text")
             elif mode == "replace_file":
                 _require(data.target_file_path, "target_file_path")
                 if data.content is None:
                     raise ValueError("content is required for write_mode=replace_file")
             else:
-                raise ValueError("write_mode must be one of: patch, replace_file")
+                raise ValueError("write_mode must be one of: context_edit, replace_file")
             return self.client.patch_workspace(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
                 sandbox_path=_require(data.sandbox_path, "sandbox_path"),
-                patch=data.patch_text,
+                target_file_path=_require(data.target_file_path, "target_file_path"),
+                old_text=data.old_text,
+                new_text=data.new_text,
+                before_context=data.before_context,
+                after_context=data.after_context,
+                occurrence=data.occurrence,
                 write_mode=mode,
-                target_file_path=data.target_file_path,
                 content=data.content,
                 build_language=data.build_language,
                 timeout_seconds=data.timeout_seconds,
@@ -257,8 +276,8 @@ class SleighLangChainClient:
                 "Sleigh runtime unified tool. "
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
                 "First call action=create_session_token, then pass session_token to other actions. "
-                "For patch_workspace, either provide complete git patch text (write_mode=patch, prefer full diff --git format) "
-                "or use write_mode=replace_file with target_file_path/content for full overwrite."
+                "For patch_workspace, default to write_mode=context_edit with before/old/new/after raw code snippets; "
+                "use write_mode=replace_file with target_file_path/content when full overwrite is needed."
             )
 
         def runtime_tool(**kwargs) -> str:

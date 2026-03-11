@@ -80,10 +80,9 @@ print(read_result)
 - `POST /sandboxes/{id}/ops/patch`
 - validates sandbox auth and targets directory inside sandbox filesystem
 - `sandbox_path` is required and must be an absolute directory path in sandbox
-- service exports sandbox dir to host temp workspace, applies patch, and syncs back
+- service exports sandbox dir to host temp workspace, applies edit, and syncs back
 - quality checks: run `pre-commit` when config exists; otherwise auto-detect language for fallback checks
-- `patch` must be unified diff text (not raw file content), e.g. with `*** Begin Patch` or `diff --git` headers
-- for create/delete/rename patches, include complete git metadata headers (e.g. `new file mode`, `deleted file mode`, `rename from`, `rename to`, `index`)
+- `write_mode=context_edit` is default for partial edits; pass raw snippets with `target_file_path`, `old_text`, `new_text`, and optional `before_context`/`after_context`/`occurrence`
 - `write_mode=replace_file` is supported for full overwrite by raw source content
 
 ```python
@@ -91,7 +90,11 @@ result = client.patch_workspace(
     session_token=session_token,
     sandbox_id=sandbox_id,
     sandbox_path="/app",
-    patch="*** Begin Patch\n*** End Patch\n",
+    write_mode="context_edit",
+    target_file_path="calculator.py",
+    before_context="    def multiply(self, a, b):\n        return a * b\n\n",
+    old_text="    def multiply(self, a, b):\n        return a * b\n",
+    new_text="    def multiply(self, a, b):\n        return a * b\n\n    def sqrt(self, a):\n        if a < 0:\n            raise ValueError('Cannot sqrt negative number!')\n        return a ** 0.5\n",
 )
 
 # Full overwrite mode (raw source content)

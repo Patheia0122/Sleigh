@@ -281,9 +281,13 @@ class SleighClient:
         session_token: str,
         sandbox_id: str,
         sandbox_path: str,
-        patch: str | None = None,
+        target_file_path: str,
+        old_text: str | None = None,
+        new_text: str | None = None,
+        before_context: str | None = None,
+        after_context: str | None = None,
+        occurrence: int | None = None,
         write_mode: str | None = None,
-        target_file_path: str | None = None,
         content: str | None = None,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
@@ -293,13 +297,20 @@ class SleighClient:
         body: dict[str, Any] = {
             "session_token": session_token,
             "sandbox_path": sandbox_path,
+            "target_file_path": target_file_path,
         }
-        if patch is not None:
-            body["patch"] = patch
+        if old_text is not None:
+            body["old_text"] = old_text
+        if new_text is not None:
+            body["new_text"] = new_text
+        if before_context is not None:
+            body["before_context"] = before_context
+        if after_context is not None:
+            body["after_context"] = after_context
+        if occurrence is not None:
+            body["occurrence"] = occurrence
         if write_mode is not None:
             body["write_mode"] = write_mode
-        if target_file_path is not None:
-            body["target_file_path"] = target_file_path
         if content is not None:
             body["content"] = content
         if build_language is not None:

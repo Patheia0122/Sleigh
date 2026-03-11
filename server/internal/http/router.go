@@ -101,8 +101,12 @@ type patchOpRequest struct {
 	SessionToken   string `json:"session_token"`
 	SandboxPath    string `json:"sandbox_path"`
 	WriteMode      string `json:"write_mode,omitempty"`
-	Patch          string `json:"patch,omitempty"`
 	TargetFilePath string `json:"target_file_path,omitempty"`
+	BeforeContext  string `json:"before_context,omitempty"`
+	OldText        string `json:"old_text,omitempty"`
+	NewText        string `json:"new_text,omitempty"`
+	AfterContext   string `json:"after_context,omitempty"`
+	Occurrence     int    `json:"occurrence,omitempty"`
 	Content        string `json:"content,omitempty"`
 	BuildLanguage  string `json:"build_language,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
@@ -891,12 +895,20 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
-	if writeMode == "patch" && strings.TrimSpace(body.Patch) == "" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("patch is required for write_mode=patch"))
+	if strings.TrimSpace(body.TargetFilePath) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("target_file_path is required"))
 		return
 	}
-	if writeMode == "replace_file" && strings.TrimSpace(body.TargetFilePath) == "" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("target_file_path is required for write_mode=replace_file"))
+	if writeMode == "replace_file" && strings.TrimSpace(body.Content) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("content is required for write_mode=replace_file"))
+		return
+	}
+	if writeMode == "context_edit" && strings.TrimSpace(body.OldText) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("old_text is required for write_mode=context_edit"))
+		return
+	}
+	if writeMode == "context_edit" && strings.TrimSpace(body.NewText) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("new_text is required for write_mode=context_edit"))
 		return
 	}
 	if err := r.service.EnsureRunning(req.Context(), sandboxID); err != nil {
@@ -931,23 +943,6 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("prepare temp workspace: %w", err))
 		return
-	}
-
-	tmpPath := ""
-	if writeMode == "patch" {
-		tmpFile, err := os.CreateTemp("", "sleigh-patch-*.diff")
-		if err != nil {
-			writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create temp patch file: %w", err))
-			return
-		}
-		tmpPath = tmpFile.Name()
-		defer os.Remove(tmpPath)
-		if _, err := tmpFile.WriteString(body.Patch); err != nil {
-			_ = tmpFile.Close()
-			writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("write patch temp file: %w", err))
-			return
-		}
-		_ = tmpFile.Close()
 	}
 
 	ensureOut, ensureErr := ensureSandboxDirectory(runCtx, sandboxID, sandboxPath)
@@ -985,16 +980,24 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
-	checkOut := commandOutput{}
-	applyOut := commandOutput{}
-	numstatOut := commandOutput{}
-	applyErr := error(nil)
+	editOut := commandOutput{}
+	editErr := error(nil)
 	appliedFiles := []string{}
-	if writeMode == "patch" {
-		checkOut, err = runGitApplyCommand(runCtx, cwd, "apply", "--check", "--recount", tmpPath)
-		if err != nil {
-			stdout, omittedOut, truncOut := applyOutputLimits(checkOut.stdout, maxOutputBytes, maxLines)
-			stderr, omittedErr, truncErr := applyOutputLimits(checkOut.stderr, maxOutputBytes, maxLines)
+	if writeMode == "context_edit" {
+		var targetFile string
+		targetFile, editOut, editErr = applyContextEditInWorkspace(
+			cwd,
+			sandboxPath,
+			body.TargetFilePath,
+			body.BeforeContext,
+			body.OldText,
+			body.NewText,
+			body.AfterContext,
+			body.Occurrence,
+		)
+		if editErr != nil {
+			stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
+			stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
 			writeJSON(w, stdhttp.StatusOK, patchOpResponse{
 				Status:       "error",
 				DurationMS:   time.Since(started).Milliseconds(),
@@ -1002,15 +1005,13 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 				Truncated:    truncOut || truncErr,
 				Stdout:       stdout,
 				Stderr:       stderr,
-				Error:        formatPatchCheckError(err, checkOut.stderr),
+				Error:        editErr.Error(),
 				BuildStatus:  "not_run",
 				OmittedBytes: omittedOut + omittedErr,
 			})
 			return
 		}
-		numstatOut, _ = runGitApplyCommand(runCtx, cwd, "apply", "--numstat", "--recount", tmpPath)
-		appliedFiles = parseApplyNumstatFiles(numstatOut.stdout)
-		applyOut, applyErr = runGitApplyCommand(runCtx, cwd, "apply", "--recount", tmpPath)
+		appliedFiles = []string{targetFile}
 	} else {
 		var targetFile string
 		targetFile, err = rewriteFileInWorkspace(cwd, sandboxPath, body.TargetFilePath, body.Content)
@@ -1026,8 +1027,8 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		}
 		appliedFiles = []string{targetFile}
 	}
-	stdout, omittedOut, truncOut := applyOutputLimits(checkOut.stdout+applyOut.stdout, maxOutputBytes, maxLines)
-	stderr, omittedErr, truncErr := applyOutputLimits(checkOut.stderr+applyOut.stderr, maxOutputBytes, maxLines)
+	stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
+	stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
 	resp := patchOpResponse{
 		Status:       "ok",
 		DurationMS:   time.Since(started).Milliseconds(),
@@ -1041,9 +1042,9 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		BuildStatus:  "not_run",
 		OmittedBytes: omittedOut + omittedErr,
 	}
-	if applyErr != nil {
+	if editErr != nil {
 		resp.Status = "error"
-		resp.Error = "git apply failed"
+		resp.Error = "context edit failed"
 		writeJSON(w, stdhttp.StatusOK, resp)
 		return
 	}
@@ -1057,8 +1058,8 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	if syncErr != nil {
 		resp.Status = "error"
 		resp.Error = "copy patched files back to sandbox failed"
-		combinedStdout := checkOut.stdout + applyOut.stdout + syncOut.stdout
-		combinedStderr := checkOut.stderr + applyOut.stderr + syncOut.stderr
+		combinedStdout := editOut.stdout + syncOut.stdout
+		combinedStderr := editOut.stderr + syncOut.stderr
 		stdout, omittedOut, truncOut := applyOutputLimits(combinedStdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(combinedStderr, maxOutputBytes, maxLines)
 		resp.Stdout = stdout
@@ -1107,8 +1108,8 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		}
 	}
 
-	combinedStdout := ensureOut.stdout + copyOut.stdout + checkOut.stdout + applyOut.stdout + syncOut.stdout + qualityOutput.stdout + buildOutput.stdout
-	combinedStderr := ensureOut.stderr + copyOut.stderr + checkOut.stderr + applyOut.stderr + syncOut.stderr + qualityOutput.stderr + buildOutput.stderr
+	combinedStdout := ensureOut.stdout + copyOut.stdout + editOut.stdout + syncOut.stdout + qualityOutput.stdout + buildOutput.stdout
+	combinedStderr := ensureOut.stderr + copyOut.stderr + editOut.stderr + syncOut.stderr + qualityOutput.stderr + buildOutput.stderr
 	stdout, omittedOut, truncOut = applyOutputLimits(combinedStdout, maxOutputBytes, maxLines)
 	stderr, omittedErr, truncErr = applyOutputLimits(combinedStderr, maxOutputBytes, maxLines)
 	resp.Stdout = stdout
@@ -1571,39 +1572,19 @@ func normalizeSandboxPatchPath(raw string) (string, error) {
 func normalizePatchWriteMode(raw string) (string, error) {
 	mode := strings.ToLower(strings.TrimSpace(raw))
 	switch mode {
-	case "", "patch":
-		return "patch", nil
+	case "", "context_edit":
+		return "context_edit", nil
 	case "replace_file", "rewrite", "overwrite":
 		return "replace_file", nil
 	default:
-		return "", errors.New("write_mode must be one of: patch, replace_file")
+		return "", errors.New("write_mode must be one of: context_edit, replace_file")
 	}
 }
 
 func rewriteFileInWorkspace(cwd, sandboxPath, targetFilePath, content string) (string, error) {
-	rawTarget := strings.TrimSpace(targetFilePath)
-	if rawTarget == "" {
-		return "", errors.New("target_file_path is required for write_mode=replace_file")
-	}
-	var relativeTarget string
-	if filepath.IsAbs(rawTarget) {
-		cleanSandbox := filepath.Clean(sandboxPath)
-		cleanTarget := filepath.Clean(rawTarget)
-		if cleanTarget == cleanSandbox {
-			return "", errors.New("target_file_path must be a file path, not sandbox_path itself")
-		}
-		if !strings.HasPrefix(cleanTarget, cleanSandbox+string(filepath.Separator)) {
-			return "", errors.New("target_file_path must be inside sandbox_path for write_mode=replace_file")
-		}
-		relativeTarget = strings.TrimPrefix(cleanTarget, cleanSandbox+string(filepath.Separator))
-	} else {
-		relativeTarget = filepath.Clean(rawTarget)
-	}
-	if relativeTarget == "." || relativeTarget == "" {
-		return "", errors.New("target_file_path must be a file path")
-	}
-	if strings.HasPrefix(relativeTarget, ".."+string(filepath.Separator)) || relativeTarget == ".." {
-		return "", errors.New("target_file_path cannot escape sandbox_path")
+	relativeTarget, err := resolveTargetRelativePath(sandboxPath, targetFilePath)
+	if err != nil {
+		return "", fmt.Errorf("invalid target_file_path for write_mode=replace_file: %w", err)
 	}
 	localTarget := filepath.Join(cwd, relativeTarget)
 	if err := os.MkdirAll(filepath.Dir(localTarget), 0o755); err != nil {
@@ -1615,18 +1596,95 @@ func rewriteFileInWorkspace(cwd, sandboxPath, targetFilePath, content string) (s
 	return relativeTarget, nil
 }
 
-func formatPatchCheckError(err error, stderr string) string {
-	lower := strings.ToLower(strings.TrimSpace(stderr + "\n" + fmt.Sprint(err)))
-	if strings.Contains(lower, "corrupt patch at line") {
-		return "git apply --check failed: patch appears malformed or truncated (e.g. invalid hunk header/line counts). Regenerate a complete git patch against current file content, or use write_mode=replace_file with target_file_path/content for full overwrite."
+func applyContextEditInWorkspace(
+	cwd, sandboxPath, targetFilePath, beforeContext, oldText, newText, afterContext string,
+	occurrence int,
+) (string, commandOutput, error) {
+	relativeTarget, err := resolveTargetRelativePath(sandboxPath, targetFilePath)
+	if err != nil {
+		return "", commandOutput{}, err
 	}
-	if strings.Contains(lower, "dev/null: no such file or directory") {
-		return "git apply --check failed: new-file patch metadata is incomplete. For file create/delete/rename, include complete git headers like new file mode/deleted file mode/rename from/rename to and index."
+	localTarget := filepath.Join(cwd, relativeTarget)
+	contentBytes, err := os.ReadFile(localTarget)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", commandOutput{}, errors.New("context_edit no_match: target_file_path not found under sandbox_path")
+		}
+		return "", commandOutput{}, fmt.Errorf("read target file failed: %w", err)
 	}
-	if strings.Contains(lower, "patch does not apply") {
-		return "git apply --check failed: patch context does not match current file content. Read current file first, then regenerate patch against latest content."
+	current := string(contentBytes)
+	searchBlock := beforeContext + oldText + afterContext
+	replaceBlock := beforeContext + newText + afterContext
+	if strings.TrimSpace(beforeContext) == "" && strings.TrimSpace(afterContext) == "" {
+		searchBlock = oldText
+		replaceBlock = newText
 	}
-	return "git apply --check failed: patch_text must be a complete git patch (not raw source code). Use unified diff with headers such as '*** Begin Patch' or 'diff --git ...'; for new/delete/rename, include metadata like 'new file mode'/'deleted file mode'/'rename from'/'rename to' and 'index'."
+	matchIndexes := findAllIndexes(current, searchBlock)
+	if len(matchIndexes) == 0 {
+		return "", commandOutput{}, errors.New("context_edit no_match: snippet not found; read latest file and provide tighter before_context/after_context")
+	}
+	if occurrence <= 0 {
+		occurrence = 1
+	}
+	if len(matchIndexes) > 1 && occurrence == 1 {
+		return "", commandOutput{}, errors.New("context_edit ambiguous_match: snippet matched multiple locations; provide more context or set occurrence")
+	}
+	if occurrence > len(matchIndexes) {
+		return "", commandOutput{}, fmt.Errorf("context_edit ambiguous_match: occurrence=%d exceeds match count=%d", occurrence, len(matchIndexes))
+	}
+	start := matchIndexes[occurrence-1]
+	updated := current[:start] + replaceBlock + current[start+len(searchBlock):]
+	if err := os.WriteFile(localTarget, []byte(updated), 0o644); err != nil {
+		return "", commandOutput{}, fmt.Errorf("write context edit result failed: %w", err)
+	}
+	return relativeTarget, commandOutput{
+		stdout: fmt.Sprintf("context edit applied: file=%s occurrence=%d matches=%d\n", relativeTarget, occurrence, len(matchIndexes)),
+	}, nil
+}
+
+func resolveTargetRelativePath(sandboxPath, targetFilePath string) (string, error) {
+	rawTarget := strings.TrimSpace(targetFilePath)
+	if rawTarget == "" {
+		return "", errors.New("target_file_path is required")
+	}
+	var relativeTarget string
+	if filepath.IsAbs(rawTarget) {
+		cleanSandbox := filepath.Clean(sandboxPath)
+		cleanTarget := filepath.Clean(rawTarget)
+		if cleanTarget == cleanSandbox {
+			return "", errors.New("target_file_path must be a file path, not sandbox_path itself")
+		}
+		if !strings.HasPrefix(cleanTarget, cleanSandbox+string(filepath.Separator)) {
+			return "", errors.New("target_file_path must be inside sandbox_path")
+		}
+		relativeTarget = strings.TrimPrefix(cleanTarget, cleanSandbox+string(filepath.Separator))
+	} else {
+		relativeTarget = filepath.Clean(rawTarget)
+	}
+	if relativeTarget == "." || relativeTarget == "" {
+		return "", errors.New("target_file_path must be a file path")
+	}
+	if strings.HasPrefix(relativeTarget, ".."+string(filepath.Separator)) || relativeTarget == ".." {
+		return "", errors.New("target_file_path cannot escape sandbox_path")
+	}
+	return relativeTarget, nil
+}
+
+func findAllIndexes(content, needle string) []int {
+	if needle == "" {
+		return nil
+	}
+	indexes := []int{}
+	offset := 0
+	for {
+		idx := strings.Index(content[offset:], needle)
+		if idx < 0 {
+			return indexes
+		}
+		real := offset + idx
+		indexes = append(indexes, real)
+		offset = real + 1
+	}
 }
 
 func sandboxContainerName(sandboxID string) string {

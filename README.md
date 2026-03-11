@@ -100,10 +100,10 @@ docker compose up --build
 - `GET /sessions/{sessionId}/exec-tasks` paginated history
 
 For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally.  
-For patch writes, client input uses `sandbox_path` (absolute path inside sandbox), and the server performs host-side patch by exporting/syncing that sandbox directory.
+For patch writes, client input uses `sandbox_path` (absolute path inside sandbox), and the server performs host-side edit by exporting/syncing that sandbox directory.
+`write_mode=context_edit` (default) uses raw source snippets (`target_file_path`, `before_context`, `old_text`, `new_text`, `after_context`) and server-side locate+replace.
 Patch also supports `write_mode=replace_file` for full overwrite with raw source content.
 Patch quality checks run `pre-commit` when `.pre-commit-config.yaml` exists; otherwise language-detected fallback checks are executed.
-The `patch` field must be unified diff text (not raw source code), using headers like `*** Begin Patch` or `diff --git`.
 
 All protected endpoints require `session_token` (body or query).  
 Recommended flow: first call `POST /sessions/token`, then reuse returned token for the whole task/session.
