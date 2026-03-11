@@ -68,7 +68,7 @@ class SleighToolInput(BaseModel):
     cursor: str | None = Field(None, description="Pagination cursor token.")
     workflow_steps: list[dict[str, Any]] | None = Field(
         None,
-        description="Ordered workflow steps for run_workflow.",
+        description="Ordered workflow steps for run_workflow. Each step must include sandbox_id.",
     )
     read_command: str | None = Field(None, description="Whitelisted sandbox read command.")
     read_args: list[str] | None = Field(None, description="Arguments for read command.")
@@ -122,6 +122,15 @@ class SleighToolInput(BaseModel):
     @model_validator(mode="after")
     def _validate_action_requirements(self):
         if self.action != "patch_workspace":
+            if self.action == "run_workflow":
+                if not self.workflow_steps:
+                    raise ValueError("workflow_steps is required when action=run_workflow")
+                for idx, step in enumerate(self.workflow_steps):
+                    if not isinstance(step, dict):
+                        raise ValueError(f"workflow_steps[{idx}] must be an object")
+                    sandbox_id = step.get("sandbox_id")
+                    if sandbox_id is None or str(sandbox_id).strip() == "":
+                        raise ValueError(f"workflow_steps[{idx}].sandbox_id is required")
             return self
         mode = (self.write_mode or "context_edit").strip()
         if mode == "context_edit":
@@ -297,6 +306,7 @@ class SleighLangChainClient:
                 "Sleigh runtime unified tool. "
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
                 "First call action=create_session_token, then pass session_token to other actions. "
+                "For run_workflow, every step must include sandbox_id. "
                 "For patch_workspace, default to write_mode=context_edit with before/old/new/after raw code snippets; "
                 "use write_mode=replace_file with target_file_path/content when full overwrite is needed."
             )

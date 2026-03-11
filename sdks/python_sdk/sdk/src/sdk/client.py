@@ -238,6 +238,14 @@ class SleighClient:
         )
 
     def run_workflow(self, *, session_token: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+        if not steps:
+            raise ValueError("steps is required for run_workflow")
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise ValueError(f"steps[{idx}] must be an object")
+            sandbox_id = step.get("sandbox_id")
+            if sandbox_id is None or str(sandbox_id).strip() == "":
+                raise ValueError(f"steps[{idx}].sandbox_id is required")
         return self._request(
             "POST",
             "/workflow/run",

@@ -33,4 +33,5 @@ AI coding focused tools are included:
 
 `create_sandbox` supports `confirm_low_memory` for low-memory confirmation flow.
 Use `create_session_token` first and reuse returned `session_token` in subsequent calls.
+For `run_workflow`, every step in `steps` should include `sandbox_id` (SDK performs pre-validation).
 `patch_workspace` supports two modes: `write_mode=context_edit` (server-side context locate+replace) and `write_mode=replace_file` (raw full overwrite).

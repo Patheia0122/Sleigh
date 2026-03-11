@@ -42,17 +42,19 @@ sandbox_id = created["sandbox_id"]
 Run multiple steps in one request and stop early on failure/timeout:
 
 ```python
+sandbox_id = created["sandbox_id"]
 result = client.run_workflow(
     session_token=session_token,
     steps=[
-        {"action": "create_sandbox", "image": "alpine:3.20", "memory_limit_mb": 512},
-        {"action": "exec_command", "command": "echo hello", "wait": True, "wait_timeout_seconds": 10},
-        {"action": "create_snapshot"},
-        {"action": "exec_command", "command": "uname -a", "wait": True},
+        {"action": "exec_command", "sandbox_id": sandbox_id, "command": "echo hello", "wait": True, "wait_timeout_seconds": 10},
+        {"action": "create_snapshot", "sandbox_id": sandbox_id},
+        {"action": "exec_command", "sandbox_id": sandbox_id, "command": "uname -a", "wait": True},
     ],
 )
 print(result["stopped_early"], result["steps"])
 ```
+
+Note: in SDK validation, every workflow step must include `sandbox_id`.
 
 ---
 

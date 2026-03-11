@@ -26,6 +26,7 @@ AI coding related actions included in `SleighToolInput.action`:
 - `patch_workspace`
 
 Call `create_session_token` first, then pass the returned `session_token` to other actions.
+For `run_workflow`, every step in `workflow_steps` must include `sandbox_id` (SDK enforces this before request).
 
 For `patch_workspace`, default to `write_mode=context_edit`: provide `target_file_path`, `old_text`, `new_text`, and optionally `before_context`/`after_context`/`occurrence`.
 The server performs snippet locate+replace and returns semantic errors like `no_match` / `ambiguous_match`.
