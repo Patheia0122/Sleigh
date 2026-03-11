@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	appErr "sleigh-runtime/server/internal/errors"
 	"sleigh-runtime/server/internal/id"
 	"sleigh-runtime/server/internal/notifier"
 	sqlitestore "sleigh-runtime/server/internal/store/sqlite"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type Service struct {
@@ -188,12 +188,12 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Metadata, erro
 		meta.Labels = req.Labels
 
 		if err := s.store.CreateSandbox(ctx, sqlitestore.SandboxRecord{
-			ID:        meta.ID,
-			SessionID: sessionID,
-			Image:     meta.Image,
-			Status:    meta.Status,
-			Labels:    meta.Labels,
-			Created:   meta.Created,
+			ID:           meta.ID,
+			SessionID:    sessionID,
+			Image:        meta.Image,
+			Status:       meta.Status,
+			Labels:       meta.Labels,
+			Created:      meta.Created,
 			LastAccessed: meta.Created,
 		}); err != nil {
 			span.RecordError(err)
@@ -545,6 +545,22 @@ func (s *Service) ExpandMemory(ctx context.Context, sandboxID string, targetMB i
 		return AutoExpandResult{}, appErr.ErrBadRequest
 	}
 	return s.backend.ExpandMemory(ctx, sandboxID, targetMB)
+}
+
+func (s *Service) EnsureRunning(ctx context.Context, sandboxID string) error {
+	if s.backend == nil || s.store == nil {
+		return fmt.Errorf("sandbox service not initialized")
+	}
+	if _, err := s.store.GetSandbox(ctx, sandboxID); err != nil {
+		return err
+	}
+	if err := s.backend.EnsureRunning(ctx, sandboxID); err != nil {
+		return err
+	}
+	if err := s.store.UpdateSandboxStatus(ctx, sandboxID, "running"); err != nil && err != appErr.ErrNotFound {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) ListExecHistory(
@@ -1176,12 +1192,12 @@ func (s *Service) ensureWarmPool(ctx context.Context) error {
 			meta.Created = time.Now().UTC().Format(time.RFC3339)
 		}
 		if err := s.store.CreateSandbox(ctx, sqlitestore.SandboxRecord{
-			ID:        sandboxID,
-			SessionID: "",
-			Image:     image,
-			Status:    meta.Status,
-			Labels:    req.Labels,
-			Created:   meta.Created,
+			ID:           sandboxID,
+			SessionID:    "",
+			Image:        image,
+			Status:       meta.Status,
+			Labels:       req.Labels,
+			Created:      meta.Created,
 			LastAccessed: meta.Created,
 		}); err != nil {
 			return err

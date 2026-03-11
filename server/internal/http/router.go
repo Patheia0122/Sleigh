@@ -868,6 +868,10 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeError(w, stdhttp.StatusBadRequest, errors.New("patch is required"))
 		return
 	}
+	if err := r.service.EnsureRunning(req.Context(), sandboxID); err != nil {
+		writeDomainError(w, err)
+		return
+	}
 
 	timeoutSeconds := body.TimeoutSeconds
 	if timeoutSeconds <= 0 {
@@ -958,7 +962,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			Truncated:    truncOut || truncErr,
 			Stdout:       stdout,
 			Stderr:       stderr,
-			Error:        "git apply --check failed",
+			Error:        "git apply --check failed: patch_text must be a unified diff patch (not raw source code). Include file headers such as '*** Begin Patch' or 'diff --git ...'.",
 			BuildStatus:  "not_run",
 			OmittedBytes: omittedOut + omittedErr,
 		})

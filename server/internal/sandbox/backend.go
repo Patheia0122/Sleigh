@@ -3,7 +3,7 @@ package sandbox
 import "context"
 
 type Metadata struct {
-	ID                  string            `json:"id"`
+	ID                  string            `json:"sandbox_id"`
 	Image               string            `json:"image"`
 	Status              string            `json:"status"`
 	Labels              map[string]string `json:"labels,omitempty"`

@@ -32,7 +32,7 @@ from sdk import SleighClient
 client = SleighClient(base_url="http://127.0.0.1:8080")
 session_token = "sess_demo"
 created = client.create_sandbox(session_token=session_token, image="alpine:3.20")
-sandbox_id = created["id"]
+sandbox_id = created["sandbox_id"]
 ```
 
 ---
@@ -82,6 +82,7 @@ print(read_result)
 - `sandbox_path` is required and must be an absolute directory path in sandbox
 - service exports sandbox dir to host temp workspace, applies patch, and syncs back
 - quality checks: run `pre-commit` when config exists; otherwise auto-detect language for fallback checks
+- `patch` must be unified diff text (not raw file content), e.g. with `*** Begin Patch` or `diff --git` headers
 
 ```python
 result = client.patch_workspace(

@@ -101,6 +101,7 @@ docker compose up --build
 For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally.  
 For patch writes, client input uses `sandbox_path` (absolute path inside sandbox), and the server performs host-side patch by exporting/syncing that sandbox directory.
 Patch quality checks run `pre-commit` when `.pre-commit-config.yaml` exists; otherwise language-detected fallback checks are executed.
+The `patch` field must be unified diff text (not raw source code), using headers like `*** Begin Patch` or `diff --git`.
 
 All protected endpoints require `session_token` (body or query).
 

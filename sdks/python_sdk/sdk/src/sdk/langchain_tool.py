@@ -73,7 +73,10 @@ class SleighToolInput(BaseModel):
     max_output_bytes: int | None = Field(None, ge=1, le=1048576, description="Max captured bytes per stream.")
     max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
-    patch_text: str | None = Field(None, description="Patch content for patch_workspace.")
+    patch_text: str | None = Field(
+        None,
+        description="Unified diff patch text for patch_workspace (not raw source code).",
+    )
     sandbox_path: str | None = Field(
         None,
         description="Absolute target directory path inside sandbox for patch_workspace.",
