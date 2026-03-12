@@ -3,8 +3,8 @@
 [中文版本](README_zh.md)
 
 ![PyPI](https://img.shields.io/pypi/v/sleigh-sdk)
-![Python](https://img.shields.io/pypi/pyversions/sleigh-sdk)
-![Go](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go)
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go)
 
 ![Sleigh Logo](docs/assets/Sleigh_logo.png)
 
@@ -77,16 +77,6 @@ from sdk import SleighClient
 ```
 
 More usage details: `sdks/python_sdk/README.md`.
-
-## Local Development
-
-For local debugging, a docker-compose setup is available:
-
-```bash
-docker compose up --build
-```
-
-> Production recommendation: use host service mode via `install_server.sh`.
 
 ## API Highlights
 

@@ -3,8 +3,8 @@
 [English](README.md)
 
 ![PyPI](https://img.shields.io/pypi/v/sleigh-sdk)
-![Python](https://img.shields.io/pypi/pyversions/sleigh-sdk)
-![Go](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go)
+![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go)
 
 ![Sleigh Logo](docs/assets/Sleigh_logo.png)
 
@@ -76,16 +76,6 @@ from sdk import SleighClient
 ```
 
 更多说明见：`sdks/python_sdk/README.md`。
-
-## 本地开发模式
-
-仓库仍提供 `docker compose` 便于本地调试：
-
-```bash
-docker compose up --build
-```
-
-> 生产建议：使用 `install_server.sh` 宿主机服务模式。
 
 ## API 核心能力
 
