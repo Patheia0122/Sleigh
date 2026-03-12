@@ -56,6 +56,7 @@ func main() {
 		ExecTTLDays:                cfg.ExecTTLDays,
 		ExecCleanupIntervalSeconds: cfg.ExecCleanupIntervalSeconds,
 		MountAllowedRoot:           cfg.MountAllowedRoot,
+		EnvironmentAllowedRoot:     cfg.EnvironmentAllowedRoot,
 		WarmPoolSize:               cfg.WarmPoolSize,
 		WarmPoolImage:              cfg.WarmPoolImage,
 		WarmPoolMemoryMB:           cfg.WarmPoolMemoryMB,

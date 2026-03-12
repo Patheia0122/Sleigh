@@ -53,7 +53,7 @@ git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server
 Installer behavior:
 
 - prompts language (English / Chinese)
-- configures mount allowlist root interactively
+- configures mount-zone and environment-zone allowlist roots interactively
 - builds server binary on host
 - installs and starts `systemd` service `sleigh.service`
 
@@ -90,12 +90,14 @@ More usage details: `sdks/python_sdk/README.md`.
 - `GET /sandboxes/{id}/memory/pressure` query pressure
 - `POST /sandboxes/{id}/memory/expand` request memory expansion
 - `GET /mounts/workspaces` list available workspace directories under mount allowlist root
+- `GET /environments/workspaces` list available environment directories under environment allowlist root
 - `POST /sandboxes/{id}/ops/read` sandbox read operation (sync, allowlisted commands)
 - `POST /sandboxes/{id}/ops/code/write` sandbox-scoped code write pipeline
-- `POST /sandboxes/{id}/environment/copy` copy one allowlisted host workspace directory into sandbox via `docker cp`
+- `POST /sandboxes/{id}/environment/copy` copy one allowlisted host environment directory into sandbox via `docker cp`
 - `GET /sessions/{sessionId}/exec-tasks` paginated history
 
-For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally. Mount mode is now enforced as read-only (`ro`).  
+For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally. Mount mode is enforced as read-only (`ro`).  
+For environment copy, client input uses `environment_path` (relative to `SERVER_ENV_ALLOWED_ROOT`) and `sandbox_path` (absolute path inside sandbox) to copy host files into the target sandbox.
 For code writes, client input uses `sandbox_path` (absolute file path inside sandbox), and the server performs host-side edit by exporting/syncing the target file directory.
 `write_mode=context_edit` (default) uses raw source snippets (`before_context`, `old_text`, `new_text`, `after_context`) and server-side locate+replace.
 Code write also supports `write_mode=replace_file` for full overwrite with raw source content.
@@ -115,7 +117,8 @@ Read/code-write style endpoints return an AI-friendly envelope:
 Configured through `install_server.sh` interactive prompts and written to `sleigh.env`.
 
 - `SERVER_ADDR` HTTP listen address
-- `SERVER_MOUNT_ALLOWED_ROOT` host mount allowlist root
+- `SERVER_MOUNT_ALLOWED_ROOT` host mount-zone allowlist root
+- `SERVER_ENV_ALLOWED_ROOT` host environment-zone allowlist root
 - `WARM_POOL_SIZE` / `WARM_POOL_IMAGE` / `WARM_POOL_MEMORY_MB`
 - `EXEC_TASK_TTL_DAYS` and `EXEC_CLEANUP_INTERVAL_SECONDS`
 - `SANDBOX_IDLE_TTL_DAYS` idle sandbox recycle threshold (default `14`)

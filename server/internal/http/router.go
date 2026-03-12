@@ -77,9 +77,10 @@ type mountRequest struct {
 }
 
 type copyEnvironmentRequest struct {
-	SessionToken  string `json:"session_token"`
-	WorkspacePath string `json:"workspace_path"`
-	SandboxPath   string `json:"sandbox_path"`
+	SessionToken    string `json:"session_token"`
+	EnvironmentPath string `json:"environment_path"`
+	WorkspacePath   string `json:"workspace_path,omitempty"`
+	SandboxPath     string `json:"sandbox_path"`
 }
 
 type readOpRequest struct {
@@ -196,6 +197,7 @@ func NewHandler(cfg config.Config, service *sandbox.Service, monitorService *mon
 	mux.HandleFunc("POST /sandboxes/{id}/mounts", router.mountPath)
 	mux.HandleFunc("DELETE /sandboxes/{id}/mounts/{mountId}", router.unmountPath)
 	mux.HandleFunc("GET /mounts/workspaces", router.listMountWorkspaces)
+	mux.HandleFunc("GET /environments/workspaces", router.listEnvironmentWorkspaces)
 	mux.HandleFunc("POST /sandboxes/{id}/environment/copy", router.copyEnvironment)
 	mux.HandleFunc("POST /sandboxes/{id}/ops/read", router.readOp)
 	mux.HandleFunc("POST /sandboxes/{id}/ops/code/write", router.codeWrite)
@@ -776,7 +778,7 @@ func normalizeWorkflowAction(action string) string {
 func resolveWorkspacePath(allowedRoot, workspacePath string) (string, error) {
 	root := strings.TrimSpace(allowedRoot)
 	if root == "" || !filepath.IsAbs(root) {
-		return "", errors.New("server mount allowed root is invalid")
+		return "", errors.New("server allowed root is invalid")
 	}
 
 	raw := strings.TrimSpace(workspacePath)
@@ -805,7 +807,7 @@ func resolveWorkspacePath(allowedRoot, workspacePath string) (string, error) {
 func listWorkspaceDirectories(root string) ([]string, error) {
 	root = strings.TrimSpace(root)
 	if root == "" || !filepath.IsAbs(root) {
-		return nil, errors.New("server mount allowed root is invalid")
+		return nil, errors.New("server allowed root is invalid")
 	}
 	info, err := os.Stat(root)
 	if err != nil {
@@ -1460,6 +1462,23 @@ func (r *Router) listMountWorkspaces(w stdhttp.ResponseWriter, req *stdhttp.Requ
 	})
 }
 
+func (r *Router) listEnvironmentWorkspaces(w stdhttp.ResponseWriter, req *stdhttp.Request) {
+	if _, err := sessionTokenFromRequest(req); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	root := strings.TrimSpace(r.config.EnvironmentAllowedRoot)
+	items, err := listWorkspaceDirectories(root)
+	if err != nil {
+		writeError(w, stdhttp.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, stdhttp.StatusOK, map[string]any{
+		"allowed_root": root,
+		"items":        items,
+	})
+}
+
 func (r *Router) copyEnvironment(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	sandboxID := strings.TrimSpace(req.PathValue("id"))
 	if sandboxID == "" {
@@ -1480,7 +1499,15 @@ func (r *Router) copyEnvironment(w stdhttp.ResponseWriter, req *stdhttp.Request)
 		writeDomainError(w, err)
 		return
 	}
-	hostPath, err := resolveWorkspacePath(r.config.MountAllowedRoot, body.WorkspacePath)
+	environmentPath := strings.TrimSpace(body.EnvironmentPath)
+	if environmentPath == "" {
+		environmentPath = strings.TrimSpace(body.WorkspacePath)
+	}
+	if environmentPath == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("environment_path is required"))
+		return
+	}
+	hostPath, err := resolveWorkspacePath(r.config.EnvironmentAllowedRoot, environmentPath)
 	if err != nil {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
@@ -1513,10 +1540,10 @@ func (r *Router) copyEnvironment(w stdhttp.ResponseWriter, req *stdhttp.Request)
 		return
 	}
 	writeJSON(w, stdhttp.StatusOK, map[string]any{
-		"status":         "ok",
-		"sandbox_id":     sandboxID,
-		"workspace_path": body.WorkspacePath,
-		"sandbox_path":   sandboxPath,
+		"status":           "ok",
+		"sandbox_id":       sandboxID,
+		"environment_path": environmentPath,
+		"sandbox_path":     sandboxPath,
 	})
 }
 

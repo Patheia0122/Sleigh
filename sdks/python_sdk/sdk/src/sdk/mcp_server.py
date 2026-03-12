@@ -21,7 +21,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
     @mcp.tool()
     def create_sandbox(
         session_token: str,
-        image: str = "alpine:3.20",
+        image: str = "python:3.11-slim",
         memory_limit_mb: int | None = None,
         confirm_low_memory: bool | None = None,
         request_timeout_seconds: float | None = None,
@@ -96,11 +96,15 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.list_mount_workspaces(session_token=session_token)
 
     @mcp.tool()
-    def copy_environment(session_token: str, sandbox_id: str, workspace_path: str, sandbox_path: str):
+    def list_environment_workspaces(session_token: str):
+        return client.list_environment_workspaces(session_token=session_token)
+
+    @mcp.tool()
+    def copy_environment(session_token: str, sandbox_id: str, environment_path: str, sandbox_path: str):
         return client.copy_environment(
             session_token=session_token,
             sandbox_id=sandbox_id,
-            workspace_path=workspace_path,
+            environment_path=environment_path,
             sandbox_path=sandbox_path,
         )
 

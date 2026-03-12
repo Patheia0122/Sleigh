@@ -96,13 +96,20 @@ mount_result = client.mount_path(
 print(mount_result)
 ```
 
-Copy one allowlisted workspace directory into sandbox filesystem (non-mount path, via `docker cp`):
+List available environment directories first:
+
+```python
+env_dirs = client.list_environment_workspaces(session_token=session_token)
+print(env_dirs["items"])
+```
+
+Copy one allowlisted environment directory into sandbox filesystem (non-mount path, via `docker cp`):
 
 ```python
 copy_result = client.copy_environment(
     session_token=session_token,
     sandbox_id=sandbox_id,
-    workspace_path="/project-a",
+    environment_path="/env-a",
     sandbox_path="/app",
 )
 print(copy_result)
@@ -121,6 +128,7 @@ print(copy_result)
 - quality checks: run `pre-commit` when config exists; otherwise auto-detect language for fallback checks
 - `write_mode=context_edit` is default for partial edits; pass raw snippets with `old_text`, `new_text`, and optional `before_context`/`after_context`/`occurrence`
 - `write_mode=replace_file` is supported for full overwrite by raw source content
+- For agent friendliness, LangChain tool also supports explicit actions: `code_write_context_edit` and `code_write_replace_file`
 
 ```python
 result = client.code_write(

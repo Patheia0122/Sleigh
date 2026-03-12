@@ -56,7 +56,7 @@ class SleighClient:
         self,
         *,
         session_token: str,
-        image: str = "alpine:3.20",
+        image: str = "python:3.11-slim",
         labels: dict[str, str] | None = None,
         memory_limit_mb: int | None = None,
         confirm_low_memory: bool | None = None,
@@ -195,12 +195,19 @@ class SleighClient:
             query={"session_token": session_token},
         )
 
+    def list_environment_workspaces(self, *, session_token: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/environments/workspaces",
+            query={"session_token": session_token},
+        )
+
     def copy_environment(
         self,
         *,
         session_token: str,
         sandbox_id: str,
-        workspace_path: str,
+        environment_path: str,
         sandbox_path: str,
     ) -> dict[str, Any]:
         return self._request(
@@ -208,7 +215,7 @@ class SleighClient:
             f"/sandboxes/{sandbox_id}/environment/copy",
             json_body={
                 "session_token": session_token,
-                "workspace_path": workspace_path,
+                "environment_path": environment_path,
                 "sandbox_path": sandbox_path,
             },
         )

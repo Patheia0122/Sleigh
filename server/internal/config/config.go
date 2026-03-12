@@ -26,6 +26,7 @@ const (
 	defaultImagePullTimeoutSeconds    = 120
 	defaultSandboxIdleTTLDays         = 14
 	defaultMountAllowedRoot           = "/opt/sleigh-runtime/mount-root-default"
+	defaultEnvironmentAllowedRoot     = "/opt/sleigh-runtime/environment-root-default"
 	defaultOTELEndpoint               = ""
 )
 
@@ -51,6 +52,7 @@ type Config struct {
 	CursorTokenTTLSeconds      int
 	ExecCleanupIntervalSeconds int
 	MountAllowedRoot           string
+	EnvironmentAllowedRoot     string
 }
 
 func FromEnv() Config {
@@ -76,6 +78,7 @@ func FromEnv() Config {
 		CursorTokenTTLSeconds:      getEnvInt("CURSOR_TOKEN_TTL_SECONDS", defaultCursorTokenTTL),
 		ExecCleanupIntervalSeconds: getEnvInt("EXEC_CLEANUP_INTERVAL_SECONDS", defaultExecCleanupIntervalSeconds),
 		MountAllowedRoot:           getEnv("SERVER_MOUNT_ALLOWED_ROOT", defaultMountAllowedRoot),
+		EnvironmentAllowedRoot:     getEnv("SERVER_ENV_ALLOWED_ROOT", defaultEnvironmentAllowedRoot),
 	}
 
 	return cfg

@@ -42,6 +42,7 @@ type Policy struct {
 	ExecTTLDays                int
 	ExecCleanupIntervalSeconds int
 	MountAllowedRoot           string
+	EnvironmentAllowedRoot     string
 	WarmPoolSize               int
 	WarmPoolImage              string
 	WarmPoolMemoryMB           int64

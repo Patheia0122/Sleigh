@@ -27,6 +27,7 @@ class SleighToolInput(BaseModel):
         "cancel_exec",
         "list_mounts",
         "list_mount_workspaces",
+        "list_environment_workspaces",
         "mount_path",
         "unmount_path",
         "copy_environment",
@@ -36,6 +37,8 @@ class SleighToolInput(BaseModel):
         "run_workflow",
         "read_sandbox",
         "code_write",
+        "code_write_context_edit",
+        "code_write_replace_file",
     ] = Field(..., description="Runtime action name to execute.")
     sandbox_id: str | None = Field(None, description="Sandbox identifier.")
     snapshot_id: str | None = Field(None, description="Snapshot identifier.")
@@ -49,7 +52,11 @@ class SleighToolInput(BaseModel):
     image: str = Field("python:3.11-slim", description="Container image when creating a sandbox.")
     workspace_path: str | None = Field(
         None,
-        description="Path relative to SERVER_MOUNT_ALLOWED_ROOT (leading '/' allowed).",
+        description="Mount-zone path relative to SERVER_MOUNT_ALLOWED_ROOT (leading '/' allowed).",
+    )
+    environment_path: str | None = Field(
+        None,
+        description="Environment-zone path relative to SERVER_ENV_ALLOWED_ROOT (leading '/' allowed).",
     )
     container_path: str | None = Field(None, description="Container mount path.")
     mode: str = Field("ro", description="Mount mode. Server currently enforces read-only mounts.")
@@ -70,7 +77,11 @@ class SleighToolInput(BaseModel):
     cursor: str | None = Field(None, description="Pagination cursor token.")
     workflow_steps: list[dict[str, Any]] | None = Field(
         None,
-        description="Ordered workflow steps for run_workflow. Each step must include sandbox_id.",
+        description=(
+            "Ordered workflow steps for run_workflow. Each step must include sandbox_id and action. "
+            "Supported action: create_sandbox/exec_command/create_snapshot/rollback_snapshot/delete_sandbox. "
+            "Common fields: sandbox_id, image, labels, memory_limit_mb, command, wait, wait_timeout_seconds, snapshot_id."
+        ),
     )
     read_command: str | None = Field(None, description="Whitelisted sandbox read command.")
     read_args: list[str] | None = Field(None, description="Arguments for read command.")
@@ -81,7 +92,10 @@ class SleighToolInput(BaseModel):
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
     write_mode: Literal["context_edit", "replace_file"] | None = Field(
         None,
-        description="code_write mode: 'context_edit' for server-side context locate+replace, 'replace_file' for full file overwrite.",
+        description=(
+            "code_write mode. If omitted, defaults to context_edit. "
+            "Use action=code_write_context_edit or action=code_write_replace_file for explicit schema grouping."
+        ),
     )
     before_context: str | None = Field(
         None,
@@ -106,7 +120,7 @@ class SleighToolInput(BaseModel):
     )
     content: str | None = Field(
         None,
-        description="For write_mode=replace_file: raw file content to write.",
+        description="For write_mode=replace_file only: raw file content to write.",
     )
     sandbox_path: str | None = Field(
         None,
@@ -119,7 +133,7 @@ class SleighToolInput(BaseModel):
 
     @model_validator(mode="after")
     def _validate_action_requirements(self):
-        if self.action != "code_write":
+        if self.action not in {"code_write", "code_write_context_edit", "code_write_replace_file"}:
             if self.action == "run_workflow":
                 if not self.workflow_steps:
                     raise ValueError("workflow_steps is required when action=run_workflow")
@@ -130,12 +144,16 @@ class SleighToolInput(BaseModel):
                     if sandbox_id is None or str(sandbox_id).strip() == "":
                         raise ValueError(f"workflow_steps[{idx}].sandbox_id is required")
             if self.action == "copy_environment":
-                if self.workspace_path is None or self.workspace_path.strip() == "":
-                    raise ValueError("workspace_path is required when action=copy_environment")
+                if self.environment_path is None or self.environment_path.strip() == "":
+                    raise ValueError("environment_path is required when action=copy_environment")
                 if self.sandbox_path is None or self.sandbox_path.strip() == "":
                     raise ValueError("sandbox_path is required when action=copy_environment")
             return self
         mode = (self.write_mode or "context_edit").strip()
+        if self.action == "code_write_context_edit":
+            mode = "context_edit"
+        if self.action == "code_write_replace_file":
+            mode = "replace_file"
         if mode == "context_edit":
             if self.sandbox_path is None or self.sandbox_path.strip() == "":
                 raise ValueError("sandbox_path is required when action=code_write and write_mode=context_edit")
@@ -213,6 +231,8 @@ class SleighLangChainClient:
             return self.client.list_mounts(session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id"))
         if action == "list_mount_workspaces":
             return self.client.list_mount_workspaces(session_token=token)
+        if action == "list_environment_workspaces":
+            return self.client.list_environment_workspaces(session_token=token)
         if action == "mount_path":
             return self.client.mount_path(
                 session_token=token,
@@ -230,7 +250,7 @@ class SleighLangChainClient:
             return self.client.copy_environment(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
-                workspace_path=_require(data.workspace_path, "workspace_path"),
+                environment_path=_require(data.environment_path, "environment_path"),
                 sandbox_path=_require(data.sandbox_path, "sandbox_path"),
             )
         if action == "get_memory_pressure":
@@ -267,8 +287,12 @@ class SleighLangChainClient:
                 max_lines=data.max_lines,
                 output_offset=data.output_offset,
             )
-        if action == "code_write":
+        if action in {"code_write", "code_write_context_edit", "code_write_replace_file"}:
             mode = (data.write_mode or "context_edit").strip()
+            if action == "code_write_context_edit":
+                mode = "context_edit"
+            if action == "code_write_replace_file":
+                mode = "replace_file"
             return self.client.code_write(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
@@ -307,8 +331,9 @@ class SleighLangChainClient:
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
                 "First call action=create_session_token, then pass session_token to other actions. "
                 "For run_workflow, every step must include sandbox_id. "
-                "For code_write, default to write_mode=context_edit with before/old/new/after raw code snippets; "
-                "use write_mode=replace_file with sandbox_path/content when full overwrite is needed."
+                "For code_write, default mode is context_edit; "
+                "prefer action=code_write_context_edit (sandbox_path+old_text+new_text) "
+                "or action=code_write_replace_file (sandbox_path+content) to avoid parameter ambiguity."
             )
 
         def runtime_tool(**kwargs) -> str:

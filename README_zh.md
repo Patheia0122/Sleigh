@@ -52,7 +52,7 @@ git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server
 安装脚本会：
 
 - 开头让你选择语言（English / 中文）
-- 交互配置挂载白名单根目录
+- 交互配置挂载区与环境区白名单根目录
 - 在宿主机构建服务端二进制
 - 安装并启动 `systemd` 服务 `sleigh.service`
 
@@ -89,12 +89,14 @@ from sdk import SleighClient
 - `GET /sandboxes/{id}/memory/pressure` 查询内存压力
 - `POST /sandboxes/{id}/memory/expand` 请求扩容
 - `GET /mounts/workspaces` 列出挂载白名单根目录下可用目录
+- `GET /environments/workspaces` 列出环境白名单根目录下可用目录
 - `POST /sandboxes/{id}/ops/read` 沙箱读操作（同步，命令白名单）
 - `POST /sandboxes/{id}/ops/code/write` 沙箱内 AI 编程写入操作
-- `POST /sandboxes/{id}/environment/copy` 将白名单目录通过 `docker cp` 拷贝进沙箱
+- `POST /sandboxes/{id}/environment/copy` 将环境区白名单目录通过 `docker cp` 拷贝进沙箱
 - `GET /sessions/{sessionId}/exec-tasks` 执行历史分页
 
 挂载写操作使用 `workspace_path`（相对 `SERVER_MOUNT_ALLOWED_ROOT`，允许带前导 `/`），服务端会在内部解析为宿主机绝对路径。挂载模式强制为只读（`ro`）。  
+环境拷贝使用 `environment_path`（相对 `SERVER_ENV_ALLOWED_ROOT`）与 `sandbox_path`（沙箱内绝对路径），语义是“宿主机环境区目录复制进目标沙箱”。
 code_write 使用 `sandbox_path`（沙箱内目标文件绝对路径），服务端会将该文件所在目录导出到宿主机临时区执行编辑后再同步回沙箱。
 `write_mode=context_edit`（默认）使用原始代码片段（`before_context`、`old_text`、`new_text`、`after_context`），由服务端完成定位与替换。
 code_write 还支持 `write_mode=replace_file`，可直接用原始代码做整文件覆盖。
@@ -114,7 +116,8 @@ code_write 质量检查策略：有 `.pre-commit-config.yaml` 时跑 `pre-commit
 通过 `install_server.sh` 交互配置并写入 `sleigh.env`。
 
 - `SERVER_ADDR` 服务监听地址
-- `SERVER_MOUNT_ALLOWED_ROOT` 挂载白名单根目录
+- `SERVER_MOUNT_ALLOWED_ROOT` 挂载区白名单根目录
+- `SERVER_ENV_ALLOWED_ROOT` 环境区白名单根目录
 - `WARM_POOL_SIZE` / `WARM_POOL_IMAGE` / `WARM_POOL_MEMORY_MB`
 - `EXEC_TASK_TTL_DAYS` 与 `EXEC_CLEANUP_INTERVAL_SECONDS`
 - `SANDBOX_IDLE_TTL_DAYS` 空闲沙箱回收阈值（默认 `14` 天）

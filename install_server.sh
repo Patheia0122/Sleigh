@@ -5,6 +5,7 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="/opt/sleigh-runtime"
 SERVICE_NAME="sleigh"
 DEFAULT_MOUNT_ROOT="${BASE_DIR}/mount-root-$(date +%Y%m%d)-$(hostname -s)-sleigh"
+DEFAULT_ENV_ROOT="${BASE_DIR}/environment-root-$(date +%Y%m%d)-$(hostname -s)-sleigh"
 INSTALL_BIN="${BASE_DIR}/bin/sleigh-server"
 ENV_FILE="${BASE_DIR}/config/sleigh.env"
 INSTALL_STATE_FILE="${BASE_DIR}/config/install-state.toml"
@@ -69,7 +70,8 @@ msg() {
       ask_config_apply_mode) echo "请选择安装方式: [1] 更新配置并重启 [2] 保留原有配置并重启 [3] 取消安装" ;;
       config_apply_cancelled) echo "已取消安装，不修改现有配置。" ;;
       keep_config_env_missing) echo "错误: 未找到现有环境配置文件，无法保留原有配置并重启。" ;;
-      ask_mount) echo "请输入挂载白名单根目录（回车使用默认目录）:" ;;
+      ask_mount) echo "请输入挂载区白名单根目录（回车使用默认目录）:" ;;
+      ask_environment) echo "请输入环境区白名单根目录（回车使用默认目录）:" ;;
       ask_server_addr) echo "请输入服务监听地址（例如 :10122、0.0.0.0:10122）:" ;;
       ask_server_version) echo "请输入服务版本标识（用于诊断展示）:" ;;
       ask_warm_pool_size) echo "请输入预热池数量（WARM_POOL_SIZE）:" ;;
@@ -84,7 +86,7 @@ msg() {
       default_dir) echo "默认目录:" ;;
       default_exists) echo "告警: 默认目录已存在，可能与历史安装重名:" ;;
       abort_install) echo "安装已退出，请重新执行并手动指定目录。" ;;
-      abs_path) echo "错误: 挂载白名单根目录必须是绝对路径。" ;;
+      abs_path) echo "错误: 目录必须是绝对路径。" ;;
       invalid_number) echo "错误: 请输入合法整数。" ;;
       invalid_port) echo "错误: 监听端口必须在 1-65535 之间。" ;;
       port_in_use) echo "错误: 监听端口已被占用，请修改 SERVER_ADDR 后重试。" ;;
@@ -100,7 +102,8 @@ msg() {
       unit) echo "systemd 单元:" ;;
       bin) echo "二进制路径:" ;;
       env) echo "环境文件:" ;;
-      mount) echo "挂载白名单根目录:" ;;
+      mount) echo "挂载区白名单根目录:" ;;
+      environment) echo "环境区白名单根目录:" ;;
       addr) echo "监听地址:" ;;
       otel) echo "OTEL gRPC endpoint:" ;;
       image_pull_timeout) echo "镜像拉取超时（秒）:" ;;
@@ -122,7 +125,8 @@ msg() {
       ask_config_apply_mode) echo "Choose install mode: [1] update config and restart [2] keep existing config and restart [3] cancel install" ;;
       config_apply_cancelled) echo "Install cancelled. Existing config is unchanged." ;;
       keep_config_env_missing) echo "Error: existing env config file not found; cannot keep existing config and restart." ;;
-      ask_mount) echo "Enter mount allowlist root (press Enter for default):" ;;
+      ask_mount) echo "Enter mount-zone allowlist root (press Enter for default):" ;;
+      ask_environment) echo "Enter environment-zone allowlist root (press Enter for default):" ;;
       ask_server_addr) echo "Enter server listen address (e.g. :10122, 0.0.0.0:10122):" ;;
       ask_server_version) echo "Enter server version label (for diagnostics):" ;;
       ask_warm_pool_size) echo "Enter warm pool size (WARM_POOL_SIZE):" ;;
@@ -137,7 +141,7 @@ msg() {
       default_dir) echo "Default directory:" ;;
       default_exists) echo "Warning: default directory already exists:" ;;
       abort_install) echo "Installation aborted. Re-run and provide a custom directory." ;;
-      abs_path) echo "Error: mount allowlist root must be an absolute path." ;;
+      abs_path) echo "Error: directory path must be absolute." ;;
       invalid_number) echo "Error: please enter a valid integer." ;;
       invalid_port) echo "Error: listen port must be between 1 and 65535." ;;
       port_in_use) echo "Error: listen port is already in use. Update SERVER_ADDR and retry." ;;
@@ -153,7 +157,8 @@ msg() {
       unit) echo "systemd unit:" ;;
       bin) echo "binary path:" ;;
       env) echo "env file:" ;;
-      mount) echo "mount allowlist root:" ;;
+      mount) echo "mount-zone allowlist root:" ;;
+      environment) echo "environment-zone allowlist root:" ;;
       addr) echo "listen address:" ;;
       otel) echo "OTEL gRPC endpoint:" ;;
       image_pull_timeout) echo "image pull timeout (seconds):" ;;
@@ -266,6 +271,7 @@ if [[ "${CONFIG_APPLY_MODE}" == "keep_restart" ]]; then
   CURSOR_TOKEN_SECRET="$(sed -n 's/^CURSOR_TOKEN_SECRET=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
   SERVER_OTEL_EXPORTER_OTLP_ENDPOINT="$(sed -n 's/^SERVER_OTEL_EXPORTER_OTLP_ENDPOINT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
   MOUNT_ROOT="$(sed -n 's/^SERVER_MOUNT_ALLOWED_ROOT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  ENV_ROOT="$(sed -n 's/^SERVER_ENV_ALLOWED_ROOT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
 
   [[ -n "${SERVER_ADDR}" ]] || SERVER_ADDR="${DEFAULT_SERVER_ADDR}"
   [[ -n "${SERVER_VERSION}" ]] || SERVER_VERSION="${DEFAULT_SERVER_VERSION}"
@@ -277,6 +283,7 @@ if [[ "${CONFIG_APPLY_MODE}" == "keep_restart" ]]; then
   [[ -n "${SANDBOX_IDLE_TTL_DAYS}" ]] || SANDBOX_IDLE_TTL_DAYS="${DEFAULT_SANDBOX_IDLE_TTL_DAYS}"
   [[ -n "${CURSOR_TOKEN_SECRET}" ]] || CURSOR_TOKEN_SECRET="$(random_secret)"
   [[ -n "${MOUNT_ROOT}" ]] || MOUNT_ROOT="${DEFAULT_MOUNT_ROOT}"
+  [[ -n "${ENV_ROOT}" ]] || ENV_ROOT="${DEFAULT_ENV_ROOT}"
 else
   echo "$(msg default_dir) ${DEFAULT_MOUNT_ROOT}"
   echo "$(msg ask_mount)"
@@ -292,6 +299,23 @@ else
   fi
 
   if [[ "${MOUNT_ROOT}" != /* ]]; then
+    echo "$(msg abs_path)" >&2
+    exit 1
+  fi
+
+  echo "$(msg default_dir) ${DEFAULT_ENV_ROOT}"
+  echo "$(msg ask_environment)"
+  read -r USER_INPUT
+  ENV_ROOT="$(trim "${USER_INPUT}")"
+  if [[ -z "${ENV_ROOT}" ]]; then
+    ENV_ROOT="${DEFAULT_ENV_ROOT}"
+    if [[ -e "${ENV_ROOT}" ]]; then
+      echo "$(msg default_exists) ${ENV_ROOT}" >&2
+      echo "$(msg abort_install)" >&2
+      exit 1
+    fi
+  fi
+  if [[ "${ENV_ROOT}" != /* ]]; then
     echo "$(msg abs_path)" >&2
     exit 1
   fi
@@ -426,7 +450,7 @@ echo "$(msg building)"
 )
 
 echo "$(msg installing)"
-${SUDO} mkdir -p "${BASE_DIR}/bin" "${BASE_DIR}/config" "${BASE_DIR}/data/snapshots" "${MOUNT_ROOT}"
+${SUDO} mkdir -p "${BASE_DIR}/bin" "${BASE_DIR}/config" "${BASE_DIR}/data/snapshots" "${MOUNT_ROOT}" "${ENV_ROOT}"
 ${SUDO} install -m 0755 /tmp/sleigh-server "${INSTALL_BIN}"
 rm -f /tmp/sleigh-server
 
@@ -467,6 +491,7 @@ CURSOR_TOKEN_SECRET=${CURSOR_TOKEN_SECRET}
 CURSOR_TOKEN_TTL_SECONDS=${DEFAULT_CURSOR_TOKEN_TTL_SECONDS}
 EXEC_CLEANUP_INTERVAL_SECONDS=${DEFAULT_EXEC_CLEANUP_INTERVAL_SECONDS}
 SERVER_MOUNT_ALLOWED_ROOT=${MOUNT_ROOT}
+SERVER_ENV_ALLOWED_ROOT=${ENV_ROOT}
 SERVER_OTEL_EXPORTER_OTLP_ENDPOINT=${SERVER_OTEL_EXPORTER_OTLP_ENDPOINT}
 PRE_COMMIT_BIN=${VENV_DIR}/bin/pre-commit
 EOF
@@ -487,6 +512,7 @@ first_installed_at = "${FIRST_INSTALLED_AT}"
 last_updated_at = "${INSTALL_UPDATED_AT}"
 server_addr = "${SERVER_ADDR}"
 mount_root = "${MOUNT_ROOT}"
+env_root = "${ENV_ROOT}"
 env_file = "${ENV_FILE}"
 unit_file = "${SYSTEMD_UNIT}"
 EOF
@@ -539,6 +565,7 @@ echo "- $(msg bin) ${INSTALL_BIN}"
 echo "- $(msg env) ${ENV_FILE}"
 echo "- $(msg addr) ${SERVER_ADDR}"
 echo "- $(msg mount) ${MOUNT_ROOT}"
+echo "- $(msg environment) ${ENV_ROOT}"
 echo "- $(msg otel) ${SERVER_OTEL_EXPORTER_OTLP_ENDPOINT:-<disabled>}"
 echo "- $(msg image_pull_timeout) ${IMAGE_PULL_TIMEOUT_SECONDS}"
 echo "- $(msg idle_ttl_days) ${SANDBOX_IDLE_TTL_DAYS}"

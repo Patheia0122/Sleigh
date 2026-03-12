@@ -30,11 +30,16 @@ AI coding focused tools are included:
 - `run_workflow`
 - `read_sandbox`
 - `code_write`
+- `code_write_context_edit`
+- `code_write_replace_file`
 - `list_mount_workspaces`
+- `list_environment_workspaces`
 - `copy_environment`
 
 `create_sandbox` supports `confirm_low_memory` for low-memory confirmation flow.
 Use `create_session_token` first and reuse returned `session_token` in subsequent calls.
 For `run_workflow`, every step in `steps` should include `sandbox_id` (SDK performs pre-validation).
 `code_write` supports two modes: `write_mode=context_edit` (server-side context locate+replace) and `write_mode=replace_file` (raw full overwrite).
+For clearer schema semantics, you can call explicit actions `code_write_context_edit` / `code_write_replace_file`.
+`copy_environment` uses `environment_path` (host environment-zone relative path) and `sandbox_path` (target path inside sandbox).
 `mount_path` is server-enforced read-only (`ro`).
