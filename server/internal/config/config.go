@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	defaultHTTPAddr                   = ":8080"
+	defaultHTTPAddr                   = ":10122"
 	defaultReadTimeout                = 10 * time.Second
 	defaultWriteTimeout               = 10 * time.Second
 	defaultShutdownTimeout            = 10 * time.Second
@@ -17,8 +17,8 @@ const (
 	defaultMaxExpandMB                = 4096
 	defaultMaxExpandStepMB            = 2048
 	defaultExecTTLDays                = 14
-	defaultWarmPoolSize               = 2
-	defaultWarmPoolImage              = "alpine:3.20"
+	defaultWarmPoolSize               = 1
+	defaultWarmPoolImage              = "python:3.11-slim"
 	defaultWarmPoolMemory             = 256
 	defaultSnapshotRootDir            = "./data/snapshots"
 	defaultCursorTokenTTL             = 3600

@@ -28,6 +28,11 @@ type Router struct {
 	monitor *monitor.Service
 }
 
+const (
+	lowMemoryBlockThreshold   = 0.10
+	lowMemoryWarningThreshold = 0.15
+)
+
 type healthResponse struct {
 	Status      string `json:"status"`
 	Time        string `json:"time"`
@@ -69,7 +74,12 @@ type mountRequest struct {
 	SessionToken  string `json:"session_token"`
 	WorkspacePath string `json:"workspace_path"`
 	ContainerPath string `json:"container_path"`
-	Mode          string `json:"mode"`
+}
+
+type copyEnvironmentRequest struct {
+	SessionToken  string `json:"session_token"`
+	WorkspacePath string `json:"workspace_path"`
+	SandboxPath   string `json:"sandbox_path"`
 }
 
 type readOpRequest struct {
@@ -97,17 +107,23 @@ type readOpResponse struct {
 	NextOffset   int64  `json:"next_offset,omitempty"`
 }
 
-type patchOpRequest struct {
+type codeWriteRequest struct {
 	SessionToken   string `json:"session_token"`
 	SandboxPath    string `json:"sandbox_path"`
-	Patch          string `json:"patch"`
+	WriteMode      string `json:"write_mode,omitempty"`
+	BeforeContext  string `json:"before_context,omitempty"`
+	OldText        string `json:"old_text,omitempty"`
+	NewText        string `json:"new_text,omitempty"`
+	AfterContext   string `json:"after_context,omitempty"`
+	Occurrence     int    `json:"occurrence,omitempty"`
+	Content        string `json:"content,omitempty"`
 	BuildLanguage  string `json:"build_language,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	MaxOutputBytes int    `json:"max_output_bytes,omitempty"`
 	MaxLines       int    `json:"max_lines,omitempty"`
 }
 
-type patchOpResponse struct {
+type codeWriteResponse struct {
 	Status       string   `json:"status"`
 	DurationMS   int64    `json:"duration_ms"`
 	TimedOut     bool     `json:"timed_out"`
@@ -179,8 +195,10 @@ func NewHandler(cfg config.Config, service *sandbox.Service, monitorService *mon
 	mux.HandleFunc("GET /sandboxes/{id}/mounts", router.listMounts)
 	mux.HandleFunc("POST /sandboxes/{id}/mounts", router.mountPath)
 	mux.HandleFunc("DELETE /sandboxes/{id}/mounts/{mountId}", router.unmountPath)
+	mux.HandleFunc("GET /mounts/workspaces", router.listMountWorkspaces)
+	mux.HandleFunc("POST /sandboxes/{id}/environment/copy", router.copyEnvironment)
 	mux.HandleFunc("POST /sandboxes/{id}/ops/read", router.readOp)
-	mux.HandleFunc("POST /sandboxes/{id}/ops/patch", router.patchOp)
+	mux.HandleFunc("POST /sandboxes/{id}/ops/code/write", router.codeWrite)
 	mux.HandleFunc("POST /workflow/run", router.runWorkflow)
 	mux.HandleFunc("GET /sessions/{sessionId}/exec-tasks", router.listSessionExecTasks)
 	mux.HandleFunc("POST /maintenance/exec-tasks/cleanup", router.cleanupExecTasks)
@@ -268,21 +286,26 @@ func (r *Router) createSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		report, monitorErr := r.monitor.GetResources(req.Context())
 		if monitorErr == nil {
 			ratio := report.Memory.AvailableRatio
-			if ratio < 0.05 {
+			if ratio < lowMemoryBlockThreshold {
 				writeError(
 					w,
 					stdhttp.StatusServiceUnavailable,
-					fmt.Errorf("host memory available ratio %.2f%% is below 5%%; sandbox creation is blocked", ratio*100),
+					fmt.Errorf(
+						"host memory available ratio %.2f%% is below %.0f%%; sandbox creation is blocked",
+						ratio*100,
+						lowMemoryBlockThreshold*100,
+					),
 				)
 				return
 			}
-			if ratio < 0.08 && !body.ConfirmLowMemory {
+			if ratio < lowMemoryWarningThreshold && !body.ConfirmLowMemory {
 				writeError(
 					w,
 					stdhttp.StatusConflict,
 					fmt.Errorf(
-						"host memory available ratio %.2f%% is below 8%%; resend with confirm_low_memory=true to continue",
+						"host memory available ratio %.2f%% is below %.0f%%; resend with confirm_low_memory=true to continue",
 						ratio*100,
+						lowMemoryWarningThreshold*100,
 					),
 				)
 				return
@@ -779,6 +802,62 @@ func resolveWorkspacePath(allowedRoot, workspacePath string) (string, error) {
 	return resolved, nil
 }
 
+func listWorkspaceDirectories(root string) ([]string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" || !filepath.IsAbs(root) {
+		return nil, errors.New("server mount allowed root is invalid")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("mount root not accessible: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("mount root is not a directory")
+	}
+	items := []string{"/"}
+	err = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if path == root || !d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		rel = strings.TrimSpace(rel)
+		if rel == "" || rel == "." {
+			return nil
+		}
+		items = append(items, "/"+strings.TrimPrefix(rel, "/"))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func normalizeSandboxCopyPath(raw string) (string, error) {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "", errors.New("sandbox_path is required")
+	}
+	if !filepath.IsAbs(path) {
+		return "", errors.New("sandbox_path must be an absolute path inside sandbox")
+	}
+	path = filepath.Clean(path)
+	if path == "/" {
+		return "", errors.New("sandbox_path cannot be root")
+	}
+	if strings.HasPrefix(path, "/proc") || strings.HasPrefix(path, "/sys") || strings.HasPrefix(path, "/dev") {
+		return "", errors.New("sandbox_path is not writable")
+	}
+	return filepath.ToSlash(path), nil
+}
+
 func (r *Router) readOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	sandboxID := strings.TrimSpace(req.PathValue("id"))
 	if sandboxID == "" {
@@ -859,8 +938,8 @@ func (r *Router) readOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	writeJSON(w, stdhttp.StatusOK, resp)
 }
 
-func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
-	var body patchOpRequest
+func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
+	var body codeWriteRequest
 	if err := decodeJSON(req, &body); err != nil {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
@@ -878,13 +957,27 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	sandboxPath, err := normalizeSandboxPatchPath(body.SandboxPath)
+	sandboxFilePath, err := normalizeSandboxCodePath(body.SandboxPath)
 	if err != nil {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
-	if strings.TrimSpace(body.Patch) == "" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("patch is required"))
+	sandboxDirPath := filepath.Dir(sandboxFilePath)
+	writeMode, err := normalizePatchWriteMode(body.WriteMode)
+	if err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
+		return
+	}
+	if writeMode == "replace_file" && strings.TrimSpace(body.Content) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("content is required for write_mode=replace_file"))
+		return
+	}
+	if writeMode == "context_edit" && strings.TrimSpace(body.OldText) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("old_text is required for write_mode=context_edit"))
+		return
+	}
+	if writeMode == "context_edit" && strings.TrimSpace(body.NewText) == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("new_text is required for write_mode=context_edit"))
 		return
 	}
 	if err := r.service.EnsureRunning(req.Context(), sandboxID); err != nil {
@@ -908,7 +1001,7 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(req.Context(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
-	workDir, err := os.MkdirTemp("", "sleigh-sbx-patch-*")
+	workDir, err := os.MkdirTemp("", "sleigh-sbx-code-write-*")
 	if err != nil {
 		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create temp workspace: %w", err))
 		return
@@ -921,25 +1014,11 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
-	tmpFile, err := os.CreateTemp("", "sleigh-patch-*.diff")
-	if err != nil {
-		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("create temp patch file: %w", err))
-		return
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmpFile.WriteString(body.Patch); err != nil {
-		_ = tmpFile.Close()
-		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("write patch temp file: %w", err))
-		return
-	}
-	_ = tmpFile.Close()
-
-	ensureOut, ensureErr := ensureSandboxDirectory(runCtx, sandboxID, sandboxPath)
+	ensureOut, ensureErr := ensureSandboxDirectory(runCtx, sandboxID, sandboxDirPath)
 	if ensureErr != nil {
 		stdout, omittedOut, truncOut := applyOutputLimits(ensureOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(ensureOut.stderr, maxOutputBytes, maxLines)
-		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+		writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
 			Status:       "error",
 			DurationMS:   time.Since(started).Milliseconds(),
 			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -952,11 +1031,11 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		})
 		return
 	}
-	copyOut, copyErr := copySandboxDirectoryToHost(runCtx, sandboxID, sandboxPath, cwd)
+	copyOut, copyErr := copySandboxDirectoryToHost(runCtx, sandboxID, sandboxDirPath, cwd)
 	if copyErr != nil {
 		stdout, omittedOut, truncOut := applyOutputLimits(copyOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(copyOut.stderr, maxOutputBytes, maxLines)
-		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
+		writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
 			Status:       "error",
 			DurationMS:   time.Since(started).Milliseconds(),
 			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -970,31 +1049,55 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
-	checkOut, checkErr := runGitApplyCommand(runCtx, cwd, "apply", "--check", tmpPath)
-	if checkErr != nil {
-		stdout, omittedOut, truncOut := applyOutputLimits(checkOut.stdout, maxOutputBytes, maxLines)
-		stderr, omittedErr, truncErr := applyOutputLimits(checkOut.stderr, maxOutputBytes, maxLines)
-		writeJSON(w, stdhttp.StatusOK, patchOpResponse{
-			Status:       "error",
-			DurationMS:   time.Since(started).Milliseconds(),
-			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
-			Truncated:    truncOut || truncErr,
-			Stdout:       stdout,
-			Stderr:       stderr,
-			Error:        "git apply --check failed: patch_text must be a complete git patch (not raw source code). Use unified diff with headers such as '*** Begin Patch' or 'diff --git ...'; for new/delete/rename, include metadata like 'new file mode'/'deleted file mode'/'rename from'/'rename to' and 'index'.",
-			BuildStatus:  "not_run",
-			OmittedBytes: omittedOut + omittedErr,
-		})
-		return
+	editOut := commandOutput{}
+	editErr := error(nil)
+	appliedFiles := []string{}
+	if writeMode == "context_edit" {
+		var targetFile string
+		targetFile, editOut, editErr = applyContextEditInWorkspace(
+			cwd,
+			sandboxFilePath,
+			body.BeforeContext,
+			body.OldText,
+			body.NewText,
+			body.AfterContext,
+			body.Occurrence,
+		)
+		if editErr != nil {
+			stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
+			stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
+			writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
+				Status:       "error",
+				DurationMS:   time.Since(started).Milliseconds(),
+				TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
+				Truncated:    truncOut || truncErr,
+				Stdout:       stdout,
+				Stderr:       stderr,
+				Error:        editErr.Error(),
+				BuildStatus:  "not_run",
+				OmittedBytes: omittedOut + omittedErr,
+			})
+			return
+		}
+		appliedFiles = []string{targetFile}
+	} else {
+		var targetFile string
+		targetFile, err = rewriteFileInWorkspace(cwd, sandboxFilePath, body.Content)
+		if err != nil {
+			writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
+				Status:      "error",
+				DurationMS:  time.Since(started).Milliseconds(),
+				TimedOut:    errors.Is(runCtx.Err(), context.DeadlineExceeded),
+				Error:       err.Error(),
+				BuildStatus: "not_run",
+			})
+			return
+		}
+		appliedFiles = []string{targetFile}
 	}
-
-	numstatOut, _ := runGitApplyCommand(runCtx, cwd, "apply", "--numstat", tmpPath)
-	appliedFiles := parseApplyNumstatFiles(numstatOut.stdout)
-
-	applyOut, applyErr := runGitApplyCommand(runCtx, cwd, "apply", tmpPath)
-	stdout, omittedOut, truncOut := applyOutputLimits(checkOut.stdout+applyOut.stdout, maxOutputBytes, maxLines)
-	stderr, omittedErr, truncErr := applyOutputLimits(checkOut.stderr+applyOut.stderr, maxOutputBytes, maxLines)
-	resp := patchOpResponse{
+	stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
+	stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
+	resp := codeWriteResponse{
 		Status:       "ok",
 		DurationMS:   time.Since(started).Milliseconds(),
 		TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
@@ -1007,24 +1110,24 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		BuildStatus:  "not_run",
 		OmittedBytes: omittedOut + omittedErr,
 	}
-	if applyErr != nil {
+	if editErr != nil {
 		resp.Status = "error"
-		resp.Error = "git apply failed"
+		resp.Error = "context edit failed"
 		writeJSON(w, stdhttp.StatusOK, resp)
 		return
 	}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		resp.Status = "error"
-		resp.Error = "patch operation timed out"
+		resp.Error = "code_write operation timed out"
 		writeJSON(w, stdhttp.StatusOK, resp)
 		return
 	}
-	syncOut, syncErr := copyHostDirectoryToSandbox(runCtx, sandboxID, sandboxPath, cwd)
+	syncOut, syncErr := copyHostDirectoryToSandbox(runCtx, sandboxID, sandboxDirPath, cwd)
 	if syncErr != nil {
 		resp.Status = "error"
-		resp.Error = "copy patched files back to sandbox failed"
-		combinedStdout := checkOut.stdout + applyOut.stdout + syncOut.stdout
-		combinedStderr := checkOut.stderr + applyOut.stderr + syncOut.stderr
+		resp.Error = "copy code changes back to sandbox failed"
+		combinedStdout := editOut.stdout + syncOut.stdout
+		combinedStderr := editOut.stderr + syncOut.stderr
 		stdout, omittedOut, truncOut := applyOutputLimits(combinedStdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(combinedStderr, maxOutputBytes, maxLines)
 		resp.Stdout = stdout
@@ -1039,16 +1142,17 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	qualityErr := error(nil)
 	if hasPreCommitConfig(cwd) {
 		qualityOutput, qualityErr = runPreCommit(runCtx, cwd, appliedFiles)
-		resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 		if qualityErr != nil {
+			resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 			resp.Status = "error"
 			resp.Error = "pre-commit checks failed; fix issues and retry"
 			resp.BuildStatus = "not_run"
 		}
 	} else if detectedLanguage := detectWorkspaceLanguage(cwd, appliedFiles); detectedLanguage != "" {
 		qualityOutput, qualityErr = runLanguageQualityChecks(runCtx, cwd, detectedLanguage)
-		resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 		if qualityErr != nil {
+			resp.FormatIssues = []string{}
+			resp.LintIssues = []string{}
 			resp.Status = "error"
 			resp.Error = formatLanguageCheckError(detectedLanguage, qualityErr, runCtx.Err())
 			resp.BuildStatus = "not_run"
@@ -1073,8 +1177,8 @@ func (r *Router) patchOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		}
 	}
 
-	combinedStdout := ensureOut.stdout + copyOut.stdout + checkOut.stdout + applyOut.stdout + syncOut.stdout + qualityOutput.stdout + buildOutput.stdout
-	combinedStderr := ensureOut.stderr + copyOut.stderr + checkOut.stderr + applyOut.stderr + syncOut.stderr + qualityOutput.stderr + buildOutput.stderr
+	combinedStdout := ensureOut.stdout + copyOut.stdout + editOut.stdout + syncOut.stdout + qualityOutput.stdout + buildOutput.stdout
+	combinedStderr := ensureOut.stderr + copyOut.stderr + editOut.stderr + syncOut.stderr + qualityOutput.stderr + buildOutput.stderr
 	stdout, omittedOut, truncOut = applyOutputLimits(combinedStdout, maxOutputBytes, maxLines)
 	stderr, omittedErr, truncErr = applyOutputLimits(combinedStderr, maxOutputBytes, maxLines)
 	resp.Stdout = stdout
@@ -1186,11 +1290,44 @@ func (r *Router) expandMemory(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	lowMemoryWarning := ""
+	if r.monitor != nil {
+		report, monitorErr := r.monitor.GetResources(req.Context())
+		if monitorErr == nil {
+			ratio := report.Memory.AvailableRatio
+			if ratio < lowMemoryBlockThreshold {
+				writeError(
+					w,
+					stdhttp.StatusServiceUnavailable,
+					fmt.Errorf(
+						"host memory available ratio %.2f%% is below %.0f%%; memory expand is blocked",
+						ratio*100,
+						lowMemoryBlockThreshold*100,
+					),
+				)
+				return
+			}
+			if ratio < lowMemoryWarningThreshold {
+				lowMemoryWarning = fmt.Sprintf(
+					"host memory available ratio %.2f%% is below %.0f%%; memory expansion succeeded but host is under pressure",
+					ratio*100,
+					lowMemoryWarningThreshold*100,
+				)
+			}
+		}
+	}
 
 	result, err := r.service.ExpandMemory(req.Context(), sandboxID, body.TargetMB)
 	if err != nil {
 		writeDomainError(w, err)
 		return
+	}
+	if lowMemoryWarning != "" {
+		if strings.TrimSpace(result.Reason) == "" {
+			result.Reason = lowMemoryWarning
+		} else {
+			result.Reason = result.Reason + "; " + lowMemoryWarning
+		}
 	}
 
 	writeJSON(w, stdhttp.StatusOK, result)
@@ -1294,22 +1431,93 @@ func (r *Router) mountPath(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeError(w, stdhttp.StatusBadRequest, errors.New("container_path must be an absolute path"))
 		return
 	}
-	mode := strings.TrimSpace(body.Mode)
-	if mode != "" && mode != "rw" && mode != "ro" {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("mode must be one of: rw, ro"))
-		return
-	}
-
 	result, err := r.service.MountPath(req.Context(), sandboxID, sandbox.MountRequest{
 		HostPath:      hostPath,
 		ContainerPath: containerPath,
-		Mode:          mode,
+		Mode:          "ro",
 	})
 	if err != nil {
 		writeDomainError(w, err)
 		return
 	}
 	writeJSON(w, stdhttp.StatusCreated, result)
+}
+
+func (r *Router) listMountWorkspaces(w stdhttp.ResponseWriter, req *stdhttp.Request) {
+	if _, err := sessionTokenFromRequest(req); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	root := strings.TrimSpace(r.config.MountAllowedRoot)
+	items, err := listWorkspaceDirectories(root)
+	if err != nil {
+		writeError(w, stdhttp.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, stdhttp.StatusOK, map[string]any{
+		"allowed_root": root,
+		"items":        items,
+	})
+}
+
+func (r *Router) copyEnvironment(w stdhttp.ResponseWriter, req *stdhttp.Request) {
+	sandboxID := strings.TrimSpace(req.PathValue("id"))
+	if sandboxID == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("sandbox id is required"))
+		return
+	}
+	var body copyEnvironmentRequest
+	if err := decodeJSON(req, &body); err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
+		return
+	}
+	sessionID := strings.TrimSpace(body.SessionToken)
+	if sessionID == "" {
+		writeDomainError(w, appErr.ErrBadRequest)
+		return
+	}
+	if err := r.service.AuthorizeSandboxAccess(req.Context(), sessionID, sandboxID); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	hostPath, err := resolveWorkspacePath(r.config.MountAllowedRoot, body.WorkspacePath)
+	if err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
+		return
+	}
+	hostInfo, hostErr := os.Stat(hostPath)
+	if hostErr != nil {
+		writeError(w, stdhttp.StatusBadRequest, fmt.Errorf("workspace_path not found: %w", hostErr))
+		return
+	}
+	if !hostInfo.IsDir() {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("workspace_path must be a directory"))
+		return
+	}
+	sandboxPath, err := normalizeSandboxCopyPath(body.SandboxPath)
+	if err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
+		return
+	}
+	if err := r.service.EnsureRunning(req.Context(), sandboxID); err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	if _, ensureErr := ensureSandboxDirectory(req.Context(), sandboxID, sandboxPath); ensureErr != nil {
+		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("ensure sandbox path failed: %w", ensureErr))
+		return
+	}
+	out, copyErr := copyHostDirectoryToSandbox(req.Context(), sandboxID, sandboxPath, hostPath)
+	if copyErr != nil {
+		writeError(w, stdhttp.StatusInternalServerError, fmt.Errorf("copy environment directory failed: %s%s", out.stderr, copyErr))
+		return
+	}
+	writeJSON(w, stdhttp.StatusOK, map[string]any{
+		"status":         "ok",
+		"sandbox_id":     sandboxID,
+		"workspace_path": body.WorkspacePath,
+		"sandbox_path":   sandboxPath,
+	})
 }
 
 func (r *Router) unmountPath(w stdhttp.ResponseWriter, req *stdhttp.Request) {
@@ -1517,21 +1725,125 @@ func runGitApplyCommand(ctx context.Context, cwd string, args ...string) (comman
 	return runCommand(ctx, "", "git", append([]string{"-C", cwd}, args...)...)
 }
 
-func normalizeSandboxPatchPath(raw string) (string, error) {
+func normalizeSandboxCodePath(raw string) (string, error) {
 	path := filepath.Clean(strings.TrimSpace(raw))
 	if path == "." || path == "" {
 		return "", errors.New("sandbox_path is required")
 	}
 	if !filepath.IsAbs(path) {
-		return "", errors.New("sandbox_path must be an absolute path inside sandbox")
+		return "", errors.New("sandbox_path must be an absolute file path inside sandbox")
 	}
 	if path == "/" {
 		return "", errors.New("sandbox_path cannot be root")
 	}
 	if strings.HasPrefix(path, "/proc") || strings.HasPrefix(path, "/sys") || strings.HasPrefix(path, "/dev") {
-		return "", errors.New("sandbox_path is not writable target")
+		return "", errors.New("sandbox_path is not writable")
 	}
 	return path, nil
+}
+
+func normalizePatchWriteMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case "", "context_edit":
+		return "context_edit", nil
+	case "replace_file", "rewrite", "overwrite":
+		return "replace_file", nil
+	default:
+		return "", errors.New("write_mode must be one of: context_edit, replace_file")
+	}
+}
+
+func rewriteFileInWorkspace(cwd, sandboxFilePath, content string) (string, error) {
+	relativeTarget, err := resolveTargetRelativePath(sandboxFilePath)
+	if err != nil {
+		return "", fmt.Errorf("invalid sandbox_path for write_mode=replace_file: %w", err)
+	}
+	localTarget := filepath.Join(cwd, relativeTarget)
+	if err := os.MkdirAll(filepath.Dir(localTarget), 0o755); err != nil {
+		return "", fmt.Errorf("create target directory failed: %w", err)
+	}
+	if err := os.WriteFile(localTarget, []byte(content), 0o644); err != nil {
+		return "", fmt.Errorf("write target file failed: %w", err)
+	}
+	return relativeTarget, nil
+}
+
+func applyContextEditInWorkspace(
+	cwd, sandboxFilePath, beforeContext, oldText, newText, afterContext string, occurrence int,
+) (string, commandOutput, error) {
+	relativeTarget, err := resolveTargetRelativePath(sandboxFilePath)
+	if err != nil {
+		return "", commandOutput{}, err
+	}
+	localTarget := filepath.Join(cwd, relativeTarget)
+	contentBytes, err := os.ReadFile(localTarget)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", commandOutput{}, errors.New("context_edit no_match: sandbox_path not found")
+		}
+		return "", commandOutput{}, fmt.Errorf("read target file failed: %w", err)
+	}
+	current := string(contentBytes)
+	searchBlock := beforeContext + oldText + afterContext
+	replaceBlock := beforeContext + newText + afterContext
+	if strings.TrimSpace(beforeContext) == "" && strings.TrimSpace(afterContext) == "" {
+		searchBlock = oldText
+		replaceBlock = newText
+	}
+	matchIndexes := findAllIndexes(current, searchBlock)
+	if len(matchIndexes) == 0 {
+		return "", commandOutput{}, errors.New("context_edit no_match: snippet not found; read latest file and provide tighter before_context/after_context")
+	}
+	if occurrence <= 0 {
+		occurrence = 1
+	}
+	if len(matchIndexes) > 1 && occurrence == 1 {
+		return "", commandOutput{}, errors.New("context_edit ambiguous_match: snippet matched multiple locations; provide more context or set occurrence")
+	}
+	if occurrence > len(matchIndexes) {
+		return "", commandOutput{}, fmt.Errorf("context_edit ambiguous_match: occurrence=%d exceeds match count=%d", occurrence, len(matchIndexes))
+	}
+	start := matchIndexes[occurrence-1]
+	updated := current[:start] + replaceBlock + current[start+len(searchBlock):]
+	if err := os.WriteFile(localTarget, []byte(updated), 0o644); err != nil {
+		return "", commandOutput{}, fmt.Errorf("write context edit result failed: %w", err)
+	}
+	return relativeTarget, commandOutput{
+		stdout: fmt.Sprintf("context edit applied: file=%s occurrence=%d matches=%d\n", relativeTarget, occurrence, len(matchIndexes)),
+	}, nil
+}
+
+func resolveTargetRelativePath(sandboxFilePath string) (string, error) {
+	cleanTarget := filepath.Clean(strings.TrimSpace(sandboxFilePath))
+	if cleanTarget == "." || cleanTarget == "" {
+		return "", errors.New("sandbox_path is required")
+	}
+	relativeTarget := filepath.Base(cleanTarget)
+	if relativeTarget == "." || relativeTarget == "" {
+		return "", errors.New("sandbox_path must point to a file")
+	}
+	if relativeTarget == "/" {
+		return "", errors.New("sandbox_path must point to a file")
+	}
+	return relativeTarget, nil
+}
+
+func findAllIndexes(content, needle string) []int {
+	if needle == "" {
+		return nil
+	}
+	indexes := []int{}
+	offset := 0
+	for {
+		idx := strings.Index(content[offset:], needle)
+		if idx < 0 {
+			return indexes
+		}
+		real := offset + idx
+		indexes = append(indexes, real)
+		offset = real + 1
+	}
 }
 
 func sandboxContainerName(sandboxID string) string {

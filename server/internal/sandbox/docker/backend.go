@@ -257,6 +257,47 @@ func (b *Backend) Exec(ctx context.Context, sandboxID, command string) (sandbox.
 	return output, nil
 }
 
+func (b *Backend) DeleteImageIfUnused(ctx context.Context, image string) (bool, string, error) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return false, "empty_image", nil
+	}
+	// Skip images still referenced by any container to avoid host-side collateral deletion.
+	referenced, err := dockerJSON(
+		ctx,
+		"ps",
+		"-a",
+		"--filter",
+		fmt.Sprintf("ancestor=%s", image),
+		"--format",
+		"{{.ID}}",
+	)
+	if err != nil {
+		return false, "check_referenced_failed", err
+	}
+	if strings.TrimSpace(referenced) != "" {
+		return false, "referenced_by_container", nil
+	}
+	_, inspectErr := dockerJSON(ctx, "image", "inspect", image)
+	if inspectErr != nil {
+		if isDockerNotFoundError(inspectErr) || strings.Contains(inspectErr.Error(), "No such image") {
+			return true, "already_deleted", nil
+		}
+		return false, "inspect_failed", inspectErr
+	}
+	if _, err := dockerJSON(ctx, "image", "rm", image); err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "being used") || strings.Contains(msg, "conflict") {
+			return false, "referenced_by_container", nil
+		}
+		if isDockerNotFoundError(err) || strings.Contains(err.Error(), "No such image") {
+			return true, "already_deleted", nil
+		}
+		return false, "remove_failed", err
+	}
+	return true, "deleted", nil
+}
+
 func (b *Backend) PreExecAutoExpand(ctx context.Context, sandboxID string) (sandbox.AutoExpandResult, error) {
 	pressure, err := b.GetMemoryPressure(ctx, sandboxID)
 	if err != nil {

@@ -112,6 +112,23 @@ func main() {
 			},
 		)
 	}
+	if cfg.ExecCleanupIntervalSeconds > 0 {
+		service.StartImageCleanupLoop(
+			ctx,
+			time.Duration(cfg.ExecCleanupIntervalSeconds)*time.Second,
+			func(result sandbox.ImageCleanupResult, err error) {
+				if err != nil {
+					log.Printf("periodic image cleanup failed: %v", err)
+					return
+				}
+				log.Printf(
+					"periodic image cleanup completed: scanned=%d deleted=%d",
+					result.Scanned,
+					result.Deleted,
+				)
+			},
+		)
+	}
 
 	errChan := make(chan error, 1)
 	go func() {

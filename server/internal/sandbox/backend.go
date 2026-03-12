@@ -75,6 +75,7 @@ type Backend interface {
 	PreExecAutoExpand(ctx context.Context, sandboxID string) (AutoExpandResult, error)
 	EmergencyExpand(ctx context.Context, sandboxID string) (AutoExpandResult, error)
 	Exec(ctx context.Context, sandboxID, command string) (ExecOutput, error)
+	DeleteImageIfUnused(ctx context.Context, image string) (bool, string, error)
 	CreateSnapshot(ctx context.Context, sandboxID string, snapshot Snapshot) error
 	RollbackToSnapshot(ctx context.Context, sandboxID string, snapshot Snapshot) (Metadata, error)
 }

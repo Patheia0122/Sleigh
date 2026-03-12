@@ -83,13 +83,25 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.list_mounts(session_token=session_token, sandbox_id=sandbox_id)
 
     @mcp.tool()
-    def mount_path(session_token: str, sandbox_id: str, workspace_path: str, container_path: str, mode: str = "rw"):
+    def mount_path(session_token: str, sandbox_id: str, workspace_path: str, container_path: str):
         return client.mount_path(
             session_token=session_token,
             sandbox_id=sandbox_id,
             workspace_path=workspace_path,
             container_path=container_path,
-            mode=mode,
+        )
+
+    @mcp.tool()
+    def list_mount_workspaces(session_token: str):
+        return client.list_mount_workspaces(session_token=session_token)
+
+    @mcp.tool()
+    def copy_environment(session_token: str, sandbox_id: str, workspace_path: str, sandbox_path: str):
+        return client.copy_environment(
+            session_token=session_token,
+            sandbox_id=sandbox_id,
+            workspace_path=workspace_path,
+            sandbox_path=sandbox_path,
         )
 
     @mcp.tool()
@@ -134,21 +146,33 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         )
 
     @mcp.tool()
-    def patch_workspace(
+    def code_write(
         session_token: str,
         sandbox_id: str,
         sandbox_path: str,
-        patch: str,
+        old_text: str | None = None,
+        new_text: str | None = None,
+        before_context: str | None = None,
+        after_context: str | None = None,
+        occurrence: int | None = None,
+        write_mode: str | None = None,
+        content: str | None = None,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
         max_output_bytes: int | None = None,
         max_lines: int | None = None,
     ):
-        return client.patch_workspace(
+        return client.code_write(
             session_token=session_token,
             sandbox_id=sandbox_id,
             sandbox_path=sandbox_path,
-            patch=patch,
+            old_text=old_text,
+            new_text=new_text,
+            before_context=before_context,
+            after_context=after_context,
+            occurrence=occurrence,
+            write_mode=write_mode,
+            content=content,
             build_language=build_language,
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,

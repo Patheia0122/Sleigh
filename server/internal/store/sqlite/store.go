@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	appErr "sleigh-runtime/server/internal/errors"
@@ -48,6 +49,11 @@ type WarmPoolEntry struct {
 	Image     string
 	MemoryMB  int64
 	CreatedAt string
+}
+
+type ManagedImageRecord struct {
+	Image      string
+	LastUsedAt string
 }
 
 type ExecTaskRecord struct {
@@ -931,6 +937,81 @@ WHERE completed_at IS NOT NULL AND completed_at < ?
 	return rows, nil
 }
 
+func (s *Store) RecordManagedImagePull(ctx context.Context, image, usedAt string) error {
+	if strings.TrimSpace(image) == "" {
+		return nil
+	}
+	if strings.TrimSpace(usedAt) == "" {
+		usedAt = now()
+	}
+	const query = `
+INSERT INTO managed_images (image, last_used_at, created_at, updated_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(image) DO UPDATE SET
+  last_used_at = excluded.last_used_at,
+  updated_at = excluded.updated_at
+`
+	_, err := s.db.ExecContext(ctx, query, image, usedAt, usedAt, usedAt)
+	if err != nil {
+		return fmt.Errorf("record managed image pull: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) TouchManagedImageIfTracked(ctx context.Context, image, usedAt string) error {
+	if strings.TrimSpace(image) == "" {
+		return nil
+	}
+	if strings.TrimSpace(usedAt) == "" {
+		usedAt = now()
+	}
+	const query = `
+UPDATE managed_images
+SET last_used_at = ?, updated_at = ?
+WHERE image = ?
+`
+	_, err := s.db.ExecContext(ctx, query, usedAt, usedAt, image)
+	if err != nil {
+		return fmt.Errorf("touch managed image usage: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) ListManagedImagesUnusedBefore(ctx context.Context, before string) ([]ManagedImageRecord, error) {
+	const query = `
+SELECT image, last_used_at
+FROM managed_images
+WHERE last_used_at < ?
+ORDER BY last_used_at ASC
+`
+	rows, err := s.db.QueryContext(ctx, query, before)
+	if err != nil {
+		return nil, fmt.Errorf("list managed images: %w", err)
+	}
+	defer rows.Close()
+	items := make([]ManagedImageRecord, 0)
+	for rows.Next() {
+		var rec ManagedImageRecord
+		if err := rows.Scan(&rec.Image, &rec.LastUsedAt); err != nil {
+			return nil, fmt.Errorf("scan managed image: %w", err)
+		}
+		items = append(items, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate managed images: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) DeleteManagedImage(ctx context.Context, image string) error {
+	const query = `DELETE FROM managed_images WHERE image = ?`
+	_, err := s.db.ExecContext(ctx, query, image)
+	if err != nil {
+		return fmt.Errorf("delete managed image: %w", err)
+	}
+	return nil
+}
+
 func migrate(ctx context.Context, db *sql.DB) error {
 	const schema = `
 PRAGMA foreign_keys = ON;
@@ -993,6 +1074,13 @@ CREATE TABLE IF NOT EXISTS warm_pool_entries (
   memory_mb INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   FOREIGN KEY(sandbox_id) REFERENCES sandboxes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS managed_images (
+  image TEXT PRIMARY KEY,
+  last_used_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_sandboxes_session_id_id

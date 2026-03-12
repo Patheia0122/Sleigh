@@ -2,6 +2,10 @@
 
 [中文版本](README_zh.md)
 
+![PyPI](https://img.shields.io/pypi/v/sleigh-sdk)
+![Python](https://img.shields.io/pypi/pyversions/sleigh-sdk)
+![Go](https://img.shields.io/badge/go-1.22+-00ADD8?logo=go)
+
 ![Sleigh Logo](docs/assets/Sleigh_logo.png)
 
 **Sleigh — Agent-native elastic sandbox runtime.**
@@ -20,7 +24,7 @@ and keep execution loops stable at scale.
 - Supports host-path mounting with permission boundaries
 - Supports ordered multi-step workflow execution in one request
 - Supports sandbox-scoped read operations with command allowlist and truncation
-- Supports sandbox-scoped patch pipeline (`git apply` + `pre-commit` + optional build)
+- Supports sandbox-scoped code write pipeline (context-edit/replace-file + `pre-commit` + optional build)
 - Uses OTEL tracing for runtime observability
 - Keeps execution history queryable with cursor pagination and TTL cleanup
 
@@ -35,7 +39,7 @@ and keep execution loops stable at scale.
 
 | Component | Recommended command |
 | --- | --- |
-| Server (host service) | `./install_server.sh` |
+| Server (host service) | `git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server.sh` |
 | Python client (base) | `pip install sleigh-sdk` |
 | Python client + LangChain | `pip install "sleigh-sdk[langchain]"` |
 | Python client + MCP | `pip install "sleigh-sdk[mcp]"` |
@@ -43,7 +47,7 @@ and keep execution loops stable at scale.
 ### Install Server (Host Service Mode)
 
 ```bash
-./install_server.sh
+git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server.sh
 ```
 
 Installer behavior:
@@ -95,19 +99,22 @@ docker compose up --build
 - `POST /sandboxes/{id}/rollback` rollback snapshot
 - `GET /sandboxes/{id}/memory/pressure` query pressure
 - `POST /sandboxes/{id}/memory/expand` request memory expansion
+- `GET /mounts/workspaces` list available workspace directories under mount allowlist root
 - `POST /sandboxes/{id}/ops/read` sandbox read operation (sync, allowlisted commands)
-- `POST /sandboxes/{id}/ops/patch` sandbox-scoped patch pipeline (mounted workspace)
+- `POST /sandboxes/{id}/ops/code/write` sandbox-scoped code write pipeline
+- `POST /sandboxes/{id}/environment/copy` copy one allowlisted host workspace directory into sandbox via `docker cp`
 - `GET /sessions/{sessionId}/exec-tasks` paginated history
 
-For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally.  
-For patch writes, client input uses `sandbox_path` (absolute path inside sandbox), and the server performs host-side patch by exporting/syncing that sandbox directory.
+For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally. Mount mode is now enforced as read-only (`ro`).  
+For code writes, client input uses `sandbox_path` (absolute file path inside sandbox), and the server performs host-side edit by exporting/syncing the target file directory.
+`write_mode=context_edit` (default) uses raw source snippets (`before_context`, `old_text`, `new_text`, `after_context`) and server-side locate+replace.
+Code write also supports `write_mode=replace_file` for full overwrite with raw source content.
 Patch quality checks run `pre-commit` when `.pre-commit-config.yaml` exists; otherwise language-detected fallback checks are executed.
-The `patch` field must be unified diff text (not raw source code), using headers like `*** Begin Patch` or `diff --git`.
 
 All protected endpoints require `session_token` (body or query).  
 Recommended flow: first call `POST /sessions/token`, then reuse returned token for the whole task/session.
 
-Read/patch style endpoints return an AI-friendly envelope:
+Read/code-write style endpoints return an AI-friendly envelope:
 
 - `status`, `duration_ms`, `timed_out`, `truncated`
 - `stdout`, `stderr`, `error`
@@ -141,13 +148,3 @@ Configured through `install_server.sh` interactive prompts and written to `sleig
 - **MCP adapter**: `sdk.run_stdio_server`
 - docs: `sdks/python_sdk/README.md`
 
-## Status
-
-Current implementation focuses on a stable, minimal production loop:
-
-- host-service deployment
-- Docker sandbox execution
-- session isolation
-- recovery and observability primitives
-
-Roadmap items continue in incremental iterations.

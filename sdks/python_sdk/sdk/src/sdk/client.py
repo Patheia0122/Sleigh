@@ -177,7 +177,6 @@ class SleighClient:
         sandbox_id: str,
         workspace_path: str,
         container_path: str,
-        mode: str = "rw",
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -186,7 +185,31 @@ class SleighClient:
                 "session_token": session_token,
                 "workspace_path": workspace_path,
                 "container_path": container_path,
-                "mode": mode,
+            },
+        )
+
+    def list_mount_workspaces(self, *, session_token: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/mounts/workspaces",
+            query={"session_token": session_token},
+        )
+
+    def copy_environment(
+        self,
+        *,
+        session_token: str,
+        sandbox_id: str,
+        workspace_path: str,
+        sandbox_path: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            f"/sandboxes/{sandbox_id}/environment/copy",
+            json_body={
+                "session_token": session_token,
+                "workspace_path": workspace_path,
+                "sandbox_path": sandbox_path,
             },
         )
 
@@ -238,6 +261,14 @@ class SleighClient:
         )
 
     def run_workflow(self, *, session_token: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+        if not steps:
+            raise ValueError("steps is required for run_workflow")
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise ValueError(f"steps[{idx}] must be an object")
+            sandbox_id = step.get("sandbox_id")
+            if sandbox_id is None or str(sandbox_id).strip() == "":
+                raise ValueError(f"steps[{idx}].sandbox_id is required")
         return self._request(
             "POST",
             "/workflow/run",
@@ -275,13 +306,19 @@ class SleighClient:
             body["output_offset"] = output_offset
         return self._request("POST", f"/sandboxes/{sandbox_id}/ops/read", json_body=body)
 
-    def patch_workspace(
+    def code_write(
         self,
         *,
         session_token: str,
         sandbox_id: str,
         sandbox_path: str,
-        patch: str,
+        old_text: str | None = None,
+        new_text: str | None = None,
+        before_context: str | None = None,
+        after_context: str | None = None,
+        occurrence: int | None = None,
+        write_mode: str | None = None,
+        content: str | None = None,
         build_language: str | None = None,
         timeout_seconds: int | None = None,
         max_output_bytes: int | None = None,
@@ -290,8 +327,21 @@ class SleighClient:
         body: dict[str, Any] = {
             "session_token": session_token,
             "sandbox_path": sandbox_path,
-            "patch": patch,
         }
+        if old_text is not None:
+            body["old_text"] = old_text
+        if new_text is not None:
+            body["new_text"] = new_text
+        if before_context is not None:
+            body["before_context"] = before_context
+        if after_context is not None:
+            body["after_context"] = after_context
+        if occurrence is not None:
+            body["occurrence"] = occurrence
+        if write_mode is not None:
+            body["write_mode"] = write_mode
+        if content is not None:
+            body["content"] = content
         if build_language is not None:
             body["build_language"] = build_language
         if timeout_seconds is not None:
@@ -300,4 +350,4 @@ class SleighClient:
             body["max_output_bytes"] = max_output_bytes
         if max_lines is not None:
             body["max_lines"] = max_lines
-        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/patch", json_body=body)
+        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/code/write", json_body=body)

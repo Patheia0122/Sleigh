@@ -12,7 +12,7 @@ Usage:
 ```python
 from sdk import SleighLangChainClient
 
-client = SleighLangChainClient(base_url="http://127.0.0.1:8080")
+client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
 tool = client.as_langchain_tool()
 ```
 
@@ -23,11 +23,16 @@ AI coding related actions included in `SleighToolInput.action`:
 - `create_session_token`
 - `run_workflow`
 - `read_sandbox`
-- `patch_workspace`
+- `code_write`
+- `list_mount_workspaces`
+- `copy_environment`
 
 Call `create_session_token` first, then pass the returned `session_token` to other actions.
+For `run_workflow`, every step in `workflow_steps` must include `sandbox_id` (SDK enforces this before request).
 
-For `patch_workspace`, the agent should provide complete git patch text (prefer full `diff --git` format), not raw source code.
-For create/delete/rename operations, include metadata headers such as `new file mode`/`deleted file mode`/`rename from`/`rename to` and `index`.
+For `code_write`, default to `write_mode=context_edit`: provide `sandbox_path` (absolute file path), `old_text`, `new_text`, and optionally `before_context`/`after_context`/`occurrence`.
+The server performs snippet locate+replace and returns semantic errors like `no_match` / `ambiguous_match`.
+If full overwrite is intended, use `write_mode=replace_file` with `sandbox_path` and raw `content`.
 
 When creating sandbox under low memory pressure, pass `confirm_low_memory=True`.
+`mount_path` is server-enforced read-only (`ro`).

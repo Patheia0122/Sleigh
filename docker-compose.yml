@@ -5,15 +5,15 @@ services:
       dockerfile: Dockerfile
     container_name: heavyworks-server
     environment:
-      SERVER_ADDR: ":8080"
+      SERVER_ADDR: ":10122"
       SERVER_VERSION: "dev"
       SERVER_DB_PATH: "/data/runtime.db"
       MEMORY_EXPAND_MIN_MB: "64"
       MEMORY_EXPAND_MAX_MB: "4096"
       MEMORY_EXPAND_MAX_STEP_MB: "2048"
       EXEC_TASK_TTL_DAYS: "14"
-      WARM_POOL_SIZE: "2"
-      WARM_POOL_IMAGE: "alpine:3.20"
+      WARM_POOL_SIZE: "1"
+      WARM_POOL_IMAGE: "python:3.11-slim"
       WARM_POOL_MEMORY_MB: "256"
       SNAPSHOT_ROOT_DIR: "/data/snapshots"
       CURSOR_TOKEN_SECRET: "dev-cursor-secret"
@@ -21,7 +21,7 @@ services:
       EXEC_CLEANUP_INTERVAL_SECONDS: "3600"
       SERVER_MOUNT_ALLOWED_ROOT: "${SERVER_MOUNT_ALLOWED_ROOT:-/opt/sleigh-runtime/mount-root-default}"
     ports:
-      - "8080:8080"
+      - "10122:10122"
     volumes:
       - ./runtime-data:/data
       - /var/run/docker.sock:/var/run/docker.sock

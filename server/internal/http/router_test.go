@@ -10,7 +10,7 @@ import (
 
 func TestHealthzReturnsOK(t *testing.T) {
 	cfg := config.Config{
-		HTTPAddr:        ":8080",
+		HTTPAddr:        ":10122",
 		ReadTimeout:     0,
 		WriteTimeout:    0,
 		ShutdownTimeout: 0,

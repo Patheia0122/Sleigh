@@ -84,6 +84,11 @@ type IdleCleanupResult struct {
 	Before      string `json:"before"`
 }
 
+type ImageCleanupResult struct {
+	Scanned int64 `json:"scanned"`
+	Deleted int64 `json:"deleted"`
+}
+
 type MountRequest struct {
 	HostPath      string `json:"host_path"`
 	ContainerPath string `json:"container_path"`
@@ -105,6 +110,8 @@ type execTask struct {
 	result ExecResult
 	cancel context.CancelFunc
 }
+
+const managedImageUnusedTTLDays = 14
 
 func NewService(
 	backend Backend,
@@ -208,6 +215,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Metadata, erro
 	}
 	s.emitSessionAggregate(context.Background(), sessionID, meta.ID, trigger, "info")
 	go s.ensureWarmPool(context.Background())
+	s.recordManagedImageUsageAsync(meta)
 	meta.StartupLatencyMS = time.Since(startedAt).Milliseconds()
 	span.SetAttributes(
 		attribute.String("sandbox.id", meta.ID),
@@ -534,14 +542,11 @@ func (s *Service) ExpandMemory(ctx context.Context, sandboxID string, targetMB i
 	if targetMB < s.policy.MinExpandMB {
 		return AutoExpandResult{}, appErr.ErrBadRequest
 	}
-	if s.policy.MaxExpandMB > 0 && targetMB > s.policy.MaxExpandMB {
-		return AutoExpandResult{}, appErr.ErrBadRequest
-	}
 	meta, err := s.backend.Get(ctx, sandboxID)
 	if err != nil {
 		return AutoExpandResult{}, err
 	}
-	if s.policy.MaxExpandStepMB > 0 && targetMB-meta.MemoryLimitMB > s.policy.MaxExpandStepMB {
+	if targetMB <= meta.MemoryLimitMB {
 		return AutoExpandResult{}, appErr.ErrBadRequest
 	}
 	return s.backend.ExpandMemory(ctx, sandboxID, targetMB)
@@ -1097,7 +1102,7 @@ func (s *Service) normalizeCreateDefaults(req CreateRequest) (string, int64) {
 func (s *Service) warmPoolConfig() (string, int64, bool) {
 	image := strings.TrimSpace(s.policy.WarmPoolImage)
 	if image == "" {
-		image = "alpine:3.20"
+		image = "python:3.11-slim"
 	}
 	memoryMB := s.policy.WarmPoolMemoryMB
 	if memoryMB <= 0 {
@@ -1376,6 +1381,76 @@ func (s *Service) StartIdleCleanupLoop(
 				run()
 			}
 		}
+	}()
+}
+
+func (s *Service) CleanupUnusedManagedImages(ctx context.Context) (ImageCleanupResult, error) {
+	if s.backend == nil || s.store == nil {
+		return ImageCleanupResult{}, fmt.Errorf("sandbox service not initialized")
+	}
+	before := time.Now().UTC().Add(-managedImageUnusedTTLDays * 24 * time.Hour).Format(time.RFC3339)
+	candidates, err := s.store.ListManagedImagesUnusedBefore(ctx, before)
+	if err != nil {
+		return ImageCleanupResult{}, err
+	}
+	result := ImageCleanupResult{Scanned: int64(len(candidates))}
+	for _, rec := range candidates {
+		deleted, _, delErr := s.backend.DeleteImageIfUnused(ctx, rec.Image)
+		if delErr != nil {
+			continue
+		}
+		if deleted {
+			if err := s.store.DeleteManagedImage(ctx, rec.Image); err != nil {
+				continue
+			}
+			result.Deleted++
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) StartImageCleanupLoop(
+	ctx context.Context,
+	interval time.Duration,
+	hook func(ImageCleanupResult, error),
+) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			runCtx, cancel := context.WithTimeout(ctx, interval)
+			result, err := s.CleanupUnusedManagedImages(runCtx)
+			cancel()
+			if hook != nil {
+				hook(result, err)
+			}
+		}
+	}()
+}
+
+func (s *Service) recordManagedImageUsageAsync(meta Metadata) {
+	if s.store == nil {
+		return
+	}
+	image := strings.TrimSpace(meta.Image)
+	if image == "" {
+		return
+	}
+	usedAt := time.Now().UTC().Format(time.RFC3339)
+	go func() {
+		if meta.ImagePullTriggered {
+			_ = s.store.RecordManagedImagePull(context.Background(), image, usedAt)
+			return
+		}
+		_ = s.store.TouchManagedImageIfTracked(context.Background(), image, usedAt)
 	}()
 }
 
