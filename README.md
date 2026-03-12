@@ -101,7 +101,10 @@ For environment copy, client input uses `environment_path` (relative to `SERVER_
 For code writes, client input uses `sandbox_path` (absolute file path inside sandbox), and the server performs host-side edit by exporting/syncing the target file directory.
 `write_mode=context_edit` (default) uses raw source snippets (`before_context`, `old_text`, `new_text`, `after_context`) and server-side locate+replace.
 Code write also supports `write_mode=replace_file` for full overwrite with raw source content.
+For LangChain integration, explicit actions `code_write_context_edit` and `code_write_replace_file` are available to reduce parameter ambiguity.
+`build_language` is optional for code_write. If the required language image does not exist on host, the server will pull it first, which can increase latency.
 Patch quality checks run `pre-commit` when `.pre-commit-config.yaml` exists; otherwise language-detected fallback checks are executed.
+For `run_workflow`, every step must include `sandbox_id`.
 
 All protected endpoints require `session_token` (body or query).  
 Recommended flow: first call `POST /sessions/token`, then reuse returned token for the whole task/session.

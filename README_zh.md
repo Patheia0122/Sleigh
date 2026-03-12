@@ -100,7 +100,10 @@ from sdk import SleighClient
 code_write 使用 `sandbox_path`（沙箱内目标文件绝对路径），服务端会将该文件所在目录导出到宿主机临时区执行编辑后再同步回沙箱。
 `write_mode=context_edit`（默认）使用原始代码片段（`before_context`、`old_text`、`new_text`、`after_context`），由服务端完成定位与替换。
 code_write 还支持 `write_mode=replace_file`，可直接用原始代码做整文件覆盖。
+LangChain 集成可使用显式 action：`code_write_context_edit` 与 `code_write_replace_file`，减少参数歧义。
+`build_language` 为可选参数；若宿主机没有对应语言镜像，服务端会先拉取镜像，导致该次请求耗时增加。
 code_write 质量检查策略：有 `.pre-commit-config.yaml` 时跑 `pre-commit`，否则自动检测语言执行兜底检查。
+`run_workflow` 要求每个 step 都提供 `sandbox_id`。
 
 受保护接口统一使用 `session_token`（请求体或 query）。  
 推荐流程：先调用 `POST /sessions/token` 获取令牌，再在同一任务/会话中复用该令牌。
