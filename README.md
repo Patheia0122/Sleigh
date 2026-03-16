@@ -8,152 +8,207 @@
 
 ![Sleigh Logo](docs/assets/Sleigh_logo.png)
 
-**Sleigh — Agent-native elastic sandbox runtime.**
+## Sleigh is a self-hosted sandbox runtime for Agents with elasticity and strong filesystem state
 
-Sleigh is an execution runtime for long-running, stateful, and resource-volatile agent workloads.
-It provides the control-plane primitives required to run sandboxed tasks safely, recover from failures,
-and keep execution loops stable at scale.
+Run the Sleigh server on a single high-resource machine, then let multiple Agents use the Sleigh client to get sandboxes with strong filesystem state and elastic memory expansion.
 
-## Self-hosted Positioning
+---
 
-Sleigh is a **self-hosted runtime choice** designed for individuals and small-to-medium teams that already have a local high-resource server.
-Instead of binding sandbox execution to a managed cloud product, Sleigh lets you run one open-source sandbox server on your own machine
-and share it across your internal Agents.
+## Why Choose Sleigh
 
-Why this matters:
+Sleigh is for teams that want cloud-sandbox-like capabilities but already have a high-resource local server, want to avoid cloud lock-in, or need to keep data in-network.
 
-- **No cloud lock-in**: open-source and deployment-agnostic
-- **No product usage fees from Sleigh**: free to run on your own infrastructure
-- **Cost predictability**: avoids cloud sandbox bills that can become expensive under high resource consumption
-- **One local control plane for many Agents**: centralize isolation, execution, and recovery capabilities on your own server
+- Session-level sandbox isolation
+- Elastic controls for resource-volatile workloads
+- Command execution (async + sync wait)
+- Snapshot and rollback
+- Strong filesystem state for long-running tasks
+- Read/write APIs for AI coding loops
+- Read-only host-path mount for safe dataset/code reuse
+- Environment-zone directory copy for fast runtime bootstrap
+- Memory pressure observation and expansion controls
+- OTEL observability support
 
-## What Sleigh Solves
+Sleigh is open-source and self-hosted. It runs on your own infrastructure.
 
-- Isolates each agent session with sandbox-level access boundaries
-- Supports command execution with async status and cancellation
-- Supports synchronous wait mode for exec requests
-- Enables snapshot and rollback for failure recovery
-- Exposes memory pressure and in-place expansion controls
-- Supports host-path mounting with permission boundaries
-- Supports ordered multi-step workflow execution in one request
-- Supports sandbox-scoped read operations with command allowlist and truncation
-- Supports sandbox-scoped code write pipeline (context-edit/replace-file + `pre-commit` + optional build)
-- Uses OTEL tracing for runtime observability
-- Keeps execution history queryable with cursor pagination and TTL cleanup
+## Who It Is For / Not For
 
-## Runtime Model
+**Good fit:**
 
-- **Server runs on host machine** (system service mode)
-- **Sandboxes run in Docker containers**
-- **Session-scoped visibility** via `session_token`
-- **Workspace-first snapshot semantics** (with container fallback)
+- Individuals or small teams with an existing Linux server
+- Teams needing long-running, high-resource, or stateful Agent execution
+- Teams wanting more predictable cost on owned hardware
 
-## Install
+**Probably not a fit:**
 
-| Component | Recommended command |
-| --- | --- |
-| Server (host service) | `git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server.sh` |
-| Python client (base) | `pip install sleigh-sdk` |
-| Python client + LangChain | `pip install "sleigh-sdk[langchain]"` |
-| Python client + MCP | `pip install "sleigh-sdk[mcp]"` |
+- You only want fully managed SaaS and do not want to run server components
+- Your workload is lightweight and cloud sandbox costs are negligible
 
-### Install Server (Host Service Mode)
+## Self-hosted vs Cloud Sandbox
+
+| Dimension | Sleigh (self-hosted) | Typical cloud sandbox |
+| --- | --- | --- |
+| Deployment | Your own server | Vendor-managed |
+| Lock-in risk | Lower (open source) | Usually higher |
+| Product usage fee | No fee | Usually usage-based |
+| Control | Full control | Constrained by platform |
+
+---
+
+## 2-Minute Quickstart
+
+### Prerequisites
+
+- Linux host
+- `systemd` available
+- Docker installed and running
+- `git`, `bash`, and network access for dependencies/images
+
+### 1) Install server (host mode)
 
 ```bash
-git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server.sh
+git clone git@github.com:Patheia0122/Sleigh.git
+cd Sleigh
+./install_server.sh
 ```
 
-Installer behavior:
+The installer builds the server binary and starts `sleigh.service`.
 
-- prompts language (English / Chinese)
-- configures mount-zone and environment-zone allowlist roots interactively
-- builds server binary on host
-- installs and starts `systemd` service `sleigh.service`
-
-Useful service checks:
+### 2) Check service health
 
 ```bash
 sudo systemctl status sleigh.service
-sudo journalctl -u sleigh.service -f
+curl -sS http://127.0.0.1:10122/healthz
 ```
 
-### Install Python Client (pip)
+### 3) Install Python SDK
 
 ```bash
 pip install sleigh-sdk
 ```
 
-Import path:
+---
+
+## Minimal End-to-End Flow (Token -> Sandbox -> Exec)
+
+### Option A: curl
+
+1) Create session token:
+
+```bash
+TOKEN=$(curl -sS -X POST http://127.0.0.1:10122/sessions/token | python3 -c "import sys,json;print(json.load(sys.stdin)['session_token'])")
+```
+
+2) Create sandbox:
+
+```bash
+SANDBOX_ID=$(curl -sS -X POST http://127.0.0.1:10122/sandboxes \
+  -H "Content-Type: application/json" \
+  -d "{\"session_token\":\"$TOKEN\",\"image\":\"python:3.11-slim\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['sandbox_id'])")
+```
+
+3) Execute command:
+
+```bash
+curl -sS -X POST "http://127.0.0.1:10122/sandboxes/$SANDBOX_ID/exec" \
+  -H "Content-Type: application/json" \
+  -d "{\"session_token\":\"$TOKEN\",\"command\":\"python -V\",\"wait\":true}"
+```
+
+### Option B: Python SDK
 
 ```python
 from sdk import SleighClient
+
+client = SleighClient(base_url="http://127.0.0.1:10122")
+token = client.create_session_token()["session_token"]
+sandbox_id = client.create_sandbox(session_token=token, image="python:3.11-slim")["sandbox_id"]
+result = client.exec_command(
+    session_token=token,
+    sandbox_id=sandbox_id,
+    command="python -V",
+    wait=True,
+)
+print(result)
 ```
 
-More usage details: `sdks/python_sdk/README.md`.
+---
 
-## API Highlights
+## Typical Agent Use Cases
 
-- `POST /sandboxes` create sandbox
-- `POST /sessions/token` issue a server-generated session token
-- `GET /sandboxes` list sandboxes in current session
-- `POST /sandboxes/{id}/exec` execute command
-- `POST /workflow/run` run ordered workflow steps in one call
-- `POST /sandboxes/{id}/snapshots` create snapshot
-- `POST /sandboxes/{id}/rollback` rollback snapshot
-- `GET /sandboxes/{id}/memory/pressure` query pressure
-- `POST /sandboxes/{id}/memory/expand` request memory expansion
-- `GET /mounts/workspaces` list available workspace directories under mount allowlist root
-- `GET /environments/workspaces` list available environment directories under environment allowlist root
-- `POST /sandboxes/{id}/ops/read` sandbox read operation (sync, allowlisted commands)
-- `POST /sandboxes/{id}/ops/code/write` sandbox-scoped code write pipeline
-- `POST /sandboxes/{id}/environment/copy` copy one allowlisted host environment directory into sandbox via `docker cp`
-- `GET /sessions/{sessionId}/exec-tasks` paginated history
+- Run coding Agent tasks in isolated containers
+- Add checkpoint/rollback for long Agent workflows
+- Serve multiple Agents from one local high-resource server
+- Keep sensitive workloads inside your own network boundary
+- Run memory-heavy tasks (for example, metagenomic alignment in computational biology, where a single task may consume hundreds of GBs or even 1TB of memory)
+- Mount large reference datasets as read-only into multiple sandboxes to avoid accidental host data mutation
+- Copy prebuilt toolchain/environment templates from environment zone into sandbox to shorten cold start
 
-For mount writes, client input uses `workspace_path` (relative to `SERVER_MOUNT_ALLOWED_ROOT`, leading `/` allowed) and the server resolves it to host absolute paths internally. Mount mode is enforced as read-only (`ro`).  
-For environment copy, client input uses `environment_path` (relative to `SERVER_ENV_ALLOWED_ROOT`) and `sandbox_path` (absolute path inside sandbox) to copy host files into the target sandbox.
-For code writes, client input uses `sandbox_path` (absolute file path inside sandbox), and the server performs host-side edit by exporting/syncing the target file directory.
-`write_mode=context_edit` (default) uses raw source snippets (`before_context`, `old_text`, `new_text`, `after_context`) and server-side locate+replace.
-Code write also supports `write_mode=replace_file` for full overwrite with raw source content.
-For LangChain integration, explicit actions `code_write_context_edit` and `code_write_replace_file` are available to reduce parameter ambiguity.
-`build_language` is optional for code_write. If the required language image does not exist on host, the server will pull it first, which can increase latency.
-Patch quality checks run `pre-commit` when `.pre-commit-config.yaml` exists; otherwise language-detected fallback checks are executed.
-For `run_workflow`, every step must include `sandbox_id`.
+## Core API
 
-All protected endpoints require `session_token` (body or query).  
-Recommended flow: first call `POST /sessions/token`, then reuse returned token for the whole task/session.
+- `POST /sessions/token`: issue session token
+- `POST /sandboxes`: create sandbox
+- `GET /sandboxes`: list session sandboxes
+- `POST /sandboxes/{id}/exec`: execute command
+- `POST /workflow/run`: ordered multi-step workflow execution
+- `POST /sandboxes/{id}/snapshots`: create snapshot
+- `POST /sandboxes/{id}/rollback`: rollback snapshot
+- `POST /sandboxes/{id}/ops/read`: read operation (allowlisted commands)
+- `POST /sandboxes/{id}/ops/code/write`: AI coding endpoint with format/lint checks and optional build verification
+- `POST /sandboxes/{id}/environment/copy`: copy environment-zone directory into sandbox
 
-Read/code-write style endpoints return an AI-friendly envelope:
+## Runtime Model
 
-- `status`, `duration_ms`, `timed_out`, `truncated`
-- `stdout`, `stderr`, `error`
-- optional `omitted_bytes`, `next_offset`, and endpoint-specific artifacts
+- Server runs on host machine (`systemd`)
+- Sandboxes run in Docker containers
+- Protected endpoints require `session_token`
 
-## Key Runtime Config
+## Python Integration Install
 
-Configured through `install_server.sh` interactive prompts and written to `sleigh.env`.
+```bash
+pip install sleigh-sdk
+pip install "sleigh-sdk[langchain]"
+pip install "sleigh-sdk[mcp]"
+```
 
-- `SERVER_ADDR` HTTP listen address
-- `SERVER_MOUNT_ALLOWED_ROOT` host mount-zone allowlist root
-- `SERVER_ENV_ALLOWED_ROOT` host environment-zone allowlist root
-- `WARM_POOL_SIZE` / `WARM_POOL_IMAGE` / `WARM_POOL_MEMORY_MB`
-- `EXEC_TASK_TTL_DAYS` and `EXEC_CLEANUP_INTERVAL_SECONDS`
-- `SANDBOX_IDLE_TTL_DAYS` idle sandbox recycle threshold (default `14`)
-- `SERVER_OTEL_EXPORTER_OTLP_ENDPOINT` optional OTLP gRPC endpoint (empty disables OTEL)
-- `IMAGE_PULL_TIMEOUT_SECONDS` image pull timeout for sandbox create
+## SDK and Agent Integration
 
-## Observability And Stability
+Sleigh SDK is designed to expose runtime capabilities directly as a LangChain Tool for Agents.
+That means Agents do not need to orchestrate raw HTTP calls manually. They can use one unified tool interface for sandbox lifecycle, command execution, read/write coding, and workflows.
 
-- `create_sandbox` response includes `startup_latency_ms`
-- image pull metadata is included in create response:
-  - `image_pull_triggered`
-  - `image_pull_status`
-  - `image_pull_duration_ms`
-- optional OTEL tracing over OTLP gRPC for sandbox lifecycle spans
-- periodic idle sandbox cleanup removes stale session sandboxes and writes audit logs
+Benefits:
 
-## SDK Integrations
+- Tool semantics cover core operations (create/exec/read/write/rollback/workflow)
+- Parameter validation before dispatch reduces Agent ambiguity
+- Agent-friendly action design (including explicit code_write actions)
+- MCP adapter is available when your platform prefers MCP transport
 
-- **LangChain Tool adapter**: `sdk.SleighLangChainClient`
-- **MCP adapter**: `sdk.run_stdio_server`
-- docs: `sdks/python_sdk/README.md`
+Minimal LangChain Tool example:
+
+```python
+from sdk import SleighLangChainClient
+
+client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
+tool = client.get_sleigh_runtime_tool()
+
+# Inject `tool` into your Agent tool list.
+```
+
+More complete Agent-friendly example:
+`examples/langchain_sleigh_runtime_tool.py`
+
+## Timeout, Image Pull, and Auto-Expand Controls
+
+## Notes and Limits
+
+- `build_language` in code_write is optional; if the server lacks the required image, it will pull first and increase latency.
+- Mount mode is read-only (`ro`) by design.
+- Environment copy is guarded by allowlisted root boundaries.
+
+## More Docs
+
+- SDK docs: `sdks/python_sdk/README.md`
+- LangChain example: `examples/langchain_sleigh_runtime_tool.py`
+- MCP stdio example: `examples/mcp_sleigh_runtime_server.py`
 

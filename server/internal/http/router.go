@@ -51,11 +51,14 @@ type createSandboxRequest struct {
 	Labels           map[string]string `json:"labels,omitempty"`
 	MemoryLimitMB    int64             `json:"memory_limit_mb,omitempty"`
 	ConfirmLowMemory bool              `json:"confirm_low_memory,omitempty"`
+	AutoExpandMemory bool              `json:"auto_expand_memory,omitempty"`
+	ImagePullPolicy  string            `json:"image_pull_policy,omitempty"`
 }
 
 type rollbackRequest struct {
 	SessionToken string `json:"session_token"`
 	SnapshotID   string `json:"snapshot_id"`
+	AutoExpand   bool   `json:"auto_expand,omitempty"`
 }
 
 type execRequest struct {
@@ -68,6 +71,7 @@ type execRequest struct {
 type expandMemoryRequest struct {
 	SessionToken string `json:"session_token"`
 	TargetMB     int64  `json:"target_mb"`
+	AutoExpand   bool   `json:"auto_expand,omitempty"`
 }
 
 type mountRequest struct {
@@ -284,6 +288,33 @@ func (r *Router) createSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	if body.Labels == nil {
 		body.Labels = map[string]string{}
 	}
+	if body.AutoExpandMemory {
+		body.Labels["auto_expand_memory"] = "true"
+	}
+	imagePullPolicy := strings.ToLower(strings.TrimSpace(body.ImagePullPolicy))
+	if imagePullPolicy == "" {
+		imagePullPolicy = "wait"
+	}
+	if imagePullPolicy != "wait" && imagePullPolicy != "notify" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("image_pull_policy must be one of: wait, notify"))
+		return
+	}
+	if imagePullPolicy == "notify" {
+		cached, resolvedImage, cacheErr := r.service.IsCreateImageCached(req.Context(), body.Image)
+		if cacheErr != nil {
+			writeDomainError(w, cacheErr)
+			return
+		}
+		if !cached {
+			writeJSON(w, stdhttp.StatusConflict, map[string]any{
+				"error":             fmt.Sprintf("image %q is not cached on host and needs pull", resolvedImage),
+				"image_pull_needed": true,
+				"resolved_image":    resolvedImage,
+				"next_action":       "retry create_sandbox with image_pull_policy=wait to perform pull",
+			})
+			return
+		}
+	}
 	if r.monitor != nil {
 		report, monitorErr := r.monitor.GetResources(req.Context())
 		if monitorErr == nil {
@@ -483,6 +514,23 @@ func (r *Router) rollbackSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request)
 	if err := r.service.AuthorizeSandboxAccess(req.Context(), sessionID, sandboxID); err != nil {
 		writeDomainError(w, err)
 		return
+	}
+	autoExpandEnabled := body.AutoExpand
+	if !autoExpandEnabled {
+		if meta, getErr := r.service.Get(req.Context(), sandboxID); getErr == nil {
+			autoExpandEnabled = strings.EqualFold(strings.TrimSpace(meta.Labels["auto_expand_memory"]), "true")
+		}
+	}
+	if autoExpandEnabled {
+		if allow, reason := r.allowAutoExpand(req.Context(), "rollback"); allow {
+			if _, expandErr := r.service.AutoExpandMemory(req.Context(), sandboxID); expandErr != nil && !errors.Is(expandErr, appErr.ErrBadRequest) {
+				writeDomainError(w, expandErr)
+				return
+			}
+		} else if reason != "" {
+			// Keep rollback available even when auto expand is blocked by host pressure.
+			_ = reason
+		}
 	}
 
 	meta, err := r.service.Rollback(req.Context(), sandboxID, body.SnapshotID)
@@ -1279,7 +1327,13 @@ func (r *Router) expandMemory(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeError(w, stdhttp.StatusBadRequest, err)
 		return
 	}
-	if body.TargetMB <= 0 {
+	autoExpandEnabled := body.AutoExpand
+	if !autoExpandEnabled && body.TargetMB <= 0 {
+		if meta, getErr := r.service.Get(req.Context(), sandboxID); getErr == nil {
+			autoExpandEnabled = strings.EqualFold(strings.TrimSpace(meta.Labels["auto_expand_memory"]), "true")
+		}
+	}
+	if body.TargetMB <= 0 && !autoExpandEnabled {
 		writeError(w, stdhttp.StatusBadRequest, errors.New("target_mb must be greater than 0"))
 		return
 	}
@@ -1292,34 +1346,21 @@ func (r *Router) expandMemory(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
-	lowMemoryWarning := ""
-	if r.monitor != nil {
-		report, monitorErr := r.monitor.GetResources(req.Context())
-		if monitorErr == nil {
-			ratio := report.Memory.AvailableRatio
-			if ratio < lowMemoryBlockThreshold {
-				writeError(
-					w,
-					stdhttp.StatusServiceUnavailable,
-					fmt.Errorf(
-						"host memory available ratio %.2f%% is below %.0f%%; memory expand is blocked",
-						ratio*100,
-						lowMemoryBlockThreshold*100,
-					),
-				)
-				return
-			}
-			if ratio < lowMemoryWarningThreshold {
-				lowMemoryWarning = fmt.Sprintf(
-					"host memory available ratio %.2f%% is below %.0f%%; memory expansion succeeded but host is under pressure",
-					ratio*100,
-					lowMemoryWarningThreshold*100,
-				)
-			}
-		}
+	allowExpand, lowMemoryWarning := r.allowAutoExpand(req.Context(), "memory expand")
+	if !allowExpand {
+		writeError(w, stdhttp.StatusServiceUnavailable, errors.New(lowMemoryWarning))
+		return
 	}
 
-	result, err := r.service.ExpandMemory(req.Context(), sandboxID, body.TargetMB)
+	var (
+		result sandbox.AutoExpandResult
+		err    error
+	)
+	if autoExpandEnabled && body.TargetMB <= 0 {
+		result, err = r.service.AutoExpandMemory(req.Context(), sandboxID)
+	} else {
+		result, err = r.service.ExpandMemory(req.Context(), sandboxID, body.TargetMB)
+	}
 	if err != nil {
 		writeDomainError(w, err)
 		return
@@ -1666,6 +1707,33 @@ func (r *Router) waitExecResult(
 		return current, false, nil
 	}
 	return current, true, nil
+}
+
+func (r *Router) allowAutoExpand(ctx context.Context, operation string) (bool, string) {
+	if r.monitor == nil {
+		return true, ""
+	}
+	report, monitorErr := r.monitor.GetResources(ctx)
+	if monitorErr != nil {
+		return true, ""
+	}
+	ratio := report.Memory.AvailableRatio
+	if ratio < lowMemoryBlockThreshold {
+		return false, fmt.Sprintf(
+			"host memory available ratio %.2f%% is below %.0f%%; %s is blocked",
+			ratio*100,
+			lowMemoryBlockThreshold*100,
+			operation,
+		)
+	}
+	if ratio < lowMemoryWarningThreshold {
+		return true, fmt.Sprintf(
+			"host memory available ratio %.2f%% is below %.0f%%; operation succeeded but host is under pressure",
+			ratio*100,
+			lowMemoryWarningThreshold*100,
+		)
+	}
+	return true, ""
 }
 
 func truncateLines(content string, maxLines int) (string, bool) {

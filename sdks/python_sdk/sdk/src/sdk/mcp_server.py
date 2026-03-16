@@ -32,6 +32,14 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             bool | None,
             Field(description="Required when host available memory ratio is between 10% and 15%."),
         ] = None,
+        auto_expand_memory: Annotated[
+            bool | None,
+            Field(description="Enable auto-expand label for future elastic operations."),
+        ] = None,
+        image_pull_policy: Annotated[
+            str | None,
+            Field(description="notify(default in SDK) or wait to perform image pull in current request."),
+        ] = "notify",
         request_timeout_seconds: Annotated[
             float | None,
             Field(description="Optional HTTP timeout override for create_sandbox request."),
@@ -43,6 +51,8 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             image=image,
             memory_limit_mb=memory_limit_mb,
             confirm_low_memory=confirm_low_memory,
+            auto_expand_memory=auto_expand_memory,
+            image_pull_policy=image_pull_policy,
             request_timeout_seconds=request_timeout_seconds,
         )
 
@@ -77,6 +87,10 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             int | None,
             Field(description="Wait timeout seconds when wait=true. Default is 10."),
         ] = None,
+        request_timeout_seconds: Annotated[
+            float | None,
+            Field(description="Optional HTTP timeout override for exec_command."),
+        ] = None,
     ):
         """Execute a shell command in sandbox (optional synchronous wait)."""
         return client.exec_command(
@@ -85,6 +99,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             command=command,
             wait=wait,
             wait_timeout_seconds=wait_timeout_seconds,
+            request_timeout_seconds=request_timeout_seconds,
         )
 
     @mcp.tool()
@@ -109,12 +124,17 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         session_token: Annotated[str, Field(description="Session token from create_session_token.")],
         sandbox_id: Annotated[str, Field(description="Target sandbox_id.")],
         snapshot_id: Annotated[str, Field(description="Snapshot id to rollback to.")],
+        auto_expand: Annotated[
+            bool | None,
+            Field(description="Trigger automatic elastic expansion before rollback."),
+        ] = None,
     ):
         """Rollback sandbox to an existing snapshot_id."""
         return client.rollback_snapshot(
             session_token=session_token,
             sandbox_id=sandbox_id,
             snapshot_id=snapshot_id,
+            auto_expand=auto_expand,
         )
 
     @mcp.tool()

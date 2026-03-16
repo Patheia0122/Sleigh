@@ -8,149 +8,206 @@
 
 ![Sleigh Logo](docs/assets/Sleigh_logo.png)
 
-**Sleigh — Agent-native elastic sandbox runtime.**
+## Sleigh 是面向 Agent 的可弹性、强文件系统状态的自托管沙箱运行时
 
-Sleigh 是面向 Agent 长周期、强状态、资源波动任务的弹性沙箱运行时。
-它提供执行控制、故障恢复和可观测能力，用于构建稳定可持续的 Agent 执行闭环。
+你可以在自己的一台高资源服务器上运行 Sleigh 的服务端，然后让多个 Agent 通过 Sleigh 的客户端获得强状态文件系统、可弹性扩容的沙箱。
 
-## Self-hosted 定位（区别于云沙箱）
+---
 
-Sleigh 提供的是 **self-hosted（自托管）方案**：面向已经有本地高资源服务器的个人开发者和中小型企业，
-在一台自己的服务器上运行开源沙箱服务端，并为内部多个 Agent 统一提供沙箱能力。
+## 为什么选择 Sleigh
 
-这个定位的核心价值：
+Sleigh 面向希望获得“云沙箱能力”，但已有本地高资源服务器，不想被云产品绑定或希望数据不出网的团队。
 
-- **不绑定任何云产品**：开源、部署方式自主可控
-- **Sleigh 本身免费使用**：在自有基础设施上运行，不收产品使用费
-- **高负载下成本更可控**：避免云沙箱在高资源消耗场景下成本快速增长
-- **一台本地服务端服务多个 Agent**：统一复用隔离、执行、回滚和可观测能力
+- 会话级沙箱隔离
+- 面向资源波动任务的弹性运行时控制
+- 命令执行（异步 + 同步等待）
+- 快照与回滚
+- 面向长任务的文件系统强状态
+- 面向 AI 编程回路的读写接口
+- 支持宿主机目录只读挂载，安全复用数据与代码
+- 支持环境区目录拷贝进沙箱，快速完成运行环境预热
+- 内存压力观测与扩容控制
+- OTEL 可观测接入
 
-## 解决的问题
+Sleigh 本身是开源 self-hosted 方案，运行在你自己的基础设施上。
 
-- 基于会话隔离沙箱可见性，避免跨会话越权访问
-- 提供命令执行、状态查询与取消能力
-- 支持 exec 同步等待模式（wait）
-- 支持快照与回滚，提高任务可恢复性
-- 提供内存压力观测与扩容控制接口
-- 支持带权限边界的宿主机目录挂载
-- 支持单请求内的有序工作流批量执行
-- 支持沙箱内只读操作（命令白名单 + 截断分页）
-- 支持沙箱内 AI 编程写入流水线（context-edit/replace-file + `pre-commit` + 可选 build）
-- 统一使用 OTEL 做运行时可观测
-- 执行历史支持游标分页与 TTL 自动清理
+## 适合谁 / 不适合谁
 
-## 运行模型
+**适合：**
 
-- **服务端运行在宿主机**（systemd 服务模式）
-- **沙箱运行在 Docker 容器**
-- **会话级访问隔离** 通过 `session_token`
-- **快照语义优先工作目录**（必要时容器兜底）
+- 已有 Linux 服务器的个人开发者或中小团队
+- 需要长周期、高资源消耗、或文件系统有状态 Agent 执行环境的团队
+- 希望在自有硬件上获得更可控成本的团队
 
-## 安装
+**可能不适合：**
 
-| 组件 | 推荐命令 |
-| --- | --- |
-| 服务端（宿主机服务） | `git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server.sh` |
-| Python 客户端（基础） | `pip install sleigh-sdk` |
-| Python 客户端 + LangChain | `pip install "sleigh-sdk[langchain]"` |
-| Python 客户端 + MCP | `pip install "sleigh-sdk[mcp]"` |
+- 你只想用全托管 SaaS，不希望维护任何服务端
+- 你的任务非常轻量，使用云沙箱也不会产生高昂价格
 
-### 安装服务端（宿主机服务模式）
+## Self-hosted 与云沙箱对比
+
+| 维度 | Sleigh（self-hosted） | 典型云沙箱 |
+| --- | --- | --- |
+| 部署方式 | 自有服务器部署 | 厂商托管 |
+| 锁定风险 | 低（开源） | 通常更高 |
+| 产品使用费 | 无费用 | 通常按量计费 |
+| 可控性 | 完整控制权 | 受限于平台能力 |
+
+---
+
+## 2 分钟快速开始
+
+### 前置条件
+
+- Linux 主机
+- 可用的 `systemd`
+- 已安装并运行 Docker
+- `git`、`bash`，以及可拉取依赖/镜像的网络
+
+### 1）安装服务端（宿主机模式）
 
 ```bash
-git clone git@github.com:Patheia0122/Sleigh.git && cd Sleigh && ./install_server.sh
+git clone git@github.com:Patheia0122/Sleigh.git
+cd Sleigh
+./install_server.sh
 ```
 
-安装脚本会：
+安装脚本会构建服务端并启动 `sleigh.service`。
 
-- 开头让你选择语言（English / 中文）
-- 交互配置挂载区与环境区白名单根目录
-- 在宿主机构建服务端二进制
-- 安装并启动 `systemd` 服务 `sleigh.service`
-
-安装后常用命令：
+### 2）检查服务状态
 
 ```bash
 sudo systemctl status sleigh.service
-sudo journalctl -u sleigh.service -f
+curl -sS http://127.0.0.1:10122/healthz
 ```
 
-### 安装 Python 客户端（pip）
+### 3）安装 Python SDK
 
 ```bash
 pip install sleigh-sdk
 ```
 
-导入方式：
+---
+
+## 最小可跑通闭环（Token -> Sandbox -> Exec）
+
+### 方案 A：curl
+
+1）申请会话令牌：
+
+```bash
+TOKEN=$(curl -sS -X POST http://127.0.0.1:10122/sessions/token | python3 -c "import sys,json;print(json.load(sys.stdin)['session_token'])")
+```
+
+2）创建沙箱：
+
+```bash
+SANDBOX_ID=$(curl -sS -X POST http://127.0.0.1:10122/sandboxes \
+  -H "Content-Type: application/json" \
+  -d "{\"session_token\":\"$TOKEN\",\"image\":\"python:3.11-slim\"}" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['sandbox_id'])")
+```
+
+3）执行命令：
+
+```bash
+curl -sS -X POST "http://127.0.0.1:10122/sandboxes/$SANDBOX_ID/exec" \
+  -H "Content-Type: application/json" \
+  -d "{\"session_token\":\"$TOKEN\",\"command\":\"python -V\",\"wait\":true}"
+```
+
+### 方案 B：Python SDK
 
 ```python
 from sdk import SleighClient
+
+client = SleighClient(base_url="http://127.0.0.1:10122")
+token = client.create_session_token()["session_token"]
+sandbox_id = client.create_sandbox(session_token=token, image="python:3.11-slim")["sandbox_id"]
+result = client.exec_command(
+    session_token=token,
+    sandbox_id=sandbox_id,
+    command="python -V",
+    wait=True,
+)
+print(result)
 ```
 
-更多说明见：`sdks/python_sdk/README.md`。
+---
 
-## API 核心能力
+## 典型 Agent 场景
 
-- `POST /sandboxes` 创建沙箱
-- `POST /sessions/token` 由服务端签发会话令牌
-- `GET /sandboxes` 列出当前会话沙箱
-- `POST /sandboxes/{id}/exec` 执行命令
-- `POST /workflow/run` 按序执行多步骤工作流
-- `POST /sandboxes/{id}/snapshots` 创建快照
-- `POST /sandboxes/{id}/rollback` 回滚快照
-- `GET /sandboxes/{id}/memory/pressure` 查询内存压力
-- `POST /sandboxes/{id}/memory/expand` 请求扩容
-- `GET /mounts/workspaces` 列出挂载白名单根目录下可用目录
-- `GET /environments/workspaces` 列出环境白名单根目录下可用目录
-- `POST /sandboxes/{id}/ops/read` 沙箱读操作（同步，命令白名单）
-- `POST /sandboxes/{id}/ops/code/write` 沙箱内 AI 编程写入操作
-- `POST /sandboxes/{id}/environment/copy` 将环境区白名单目录通过 `docker cp` 拷贝进沙箱
-- `GET /sessions/{sessionId}/exec-tasks` 执行历史分页
+- 在隔离容器中运行 coding Agent 任务
+- 为长链路 Agent 流程提供 checkpoint/rollback
+- 在一台本地高配服务器上集中服务多个 Agent
+- 把敏感任务留在自有网络边界内执行
+- 运行高内存任务（例如计算生物学中的宏基因组比对，单任务会使用几百GB甚至1TB的内存）
+- 将大型参考数据集以只读方式挂载到多个沙箱，避免误修改宿主机数据
+- 将预置工具链/环境模板从环境区复制到沙箱，缩短任务冷启动时间
 
-挂载写操作使用 `workspace_path`（相对 `SERVER_MOUNT_ALLOWED_ROOT`，允许带前导 `/`），服务端会在内部解析为宿主机绝对路径。挂载模式强制为只读（`ro`）。  
-环境拷贝使用 `environment_path`（相对 `SERVER_ENV_ALLOWED_ROOT`）与 `sandbox_path`（沙箱内绝对路径），语义是“宿主机环境区目录复制进目标沙箱”。
-code_write 使用 `sandbox_path`（沙箱内目标文件绝对路径），服务端会将该文件所在目录导出到宿主机临时区执行编辑后再同步回沙箱。
-`write_mode=context_edit`（默认）使用原始代码片段（`before_context`、`old_text`、`new_text`、`after_context`），由服务端完成定位与替换。
-code_write 还支持 `write_mode=replace_file`，可直接用原始代码做整文件覆盖。
-LangChain 集成可使用显式 action：`code_write_context_edit` 与 `code_write_replace_file`，减少参数歧义。
-`build_language` 为可选参数；若宿主机没有对应语言镜像，服务端会先拉取镜像，导致该次请求耗时增加。
-code_write 质量检查策略：有 `.pre-commit-config.yaml` 时跑 `pre-commit`，否则自动检测语言执行兜底检查。
-`run_workflow` 要求每个 step 都提供 `sandbox_id`。
+## 核心 API
 
-受保护接口统一使用 `session_token`（请求体或 query）。  
-推荐流程：先调用 `POST /sessions/token` 获取令牌，再在同一任务/会话中复用该令牌。
+- `POST /sessions/token`：签发会话令牌
+- `POST /sandboxes`：创建沙箱
+- `GET /sandboxes`：列出会话沙箱
+- `POST /sandboxes/{id}/exec`：执行命令
+- `POST /workflow/run`：按序执行多步骤工作流
+- `POST /sandboxes/{id}/snapshots`：创建快照
+- `POST /sandboxes/{id}/rollback`：回滚快照
+- `POST /sandboxes/{id}/ops/read`：只读操作（命令白名单）
+- `POST /sandboxes/{id}/ops/code/write`：AI Coding接口，支持格式/lint检查与可选编译校验
+- `POST /sandboxes/{id}/environment/copy`：环境区目录拷贝入沙箱
 
-读写类接口统一返回 AI 友好 envelope：
+## 运行模型
 
-- `status`, `duration_ms`, `timed_out`, `truncated`
-- `stdout`, `stderr`, `error`
-- 可选 `omitted_bytes`, `next_offset` 以及接口特定 artifacts
+- 服务端运行在宿主机（`systemd`）
+- 沙箱运行在 Docker 容器
+- 受保护接口统一要求 `session_token`
 
-## 关键运行配置
+## Python 集成安装
 
-通过 `install_server.sh` 交互配置并写入 `sleigh.env`。
+```bash
+pip install sleigh-sdk
+pip install "sleigh-sdk[langchain]"
+pip install "sleigh-sdk[mcp]"
+```
 
-- `SERVER_ADDR` 服务监听地址
-- `SERVER_MOUNT_ALLOWED_ROOT` 挂载区白名单根目录
-- `SERVER_ENV_ALLOWED_ROOT` 环境区白名单根目录
-- `WARM_POOL_SIZE` / `WARM_POOL_IMAGE` / `WARM_POOL_MEMORY_MB`
-- `EXEC_TASK_TTL_DAYS` 与 `EXEC_CLEANUP_INTERVAL_SECONDS`
-- `SANDBOX_IDLE_TTL_DAYS` 空闲沙箱回收阈值（默认 `14` 天）
-- `SERVER_OTEL_EXPORTER_OTLP_ENDPOINT` 可选 OTLP gRPC 地址（留空关闭 OTEL）
-- `IMAGE_PULL_TIMEOUT_SECONDS` 沙箱创建时镜像拉取超时
+## SDK 与 Agent 集成
 
-## 可观测与稳定性
+Sleigh 的 SDK 重点支持把能力直接作为 LangChain Tool 提供给 Agent。
+也就是：Agent 不需要手动编排底层 HTTP 调用，可以通过统一工具入口完成沙箱生命周期、命令执行、读写代码、工作流等操作。
 
-- `create_sandbox` 响应包含 `startup_latency_ms`
-- 创建响应包含镜像拉取观测字段：
-  - `image_pull_triggered`
-  - `image_pull_status`
-  - `image_pull_duration_ms`
-- 支持可选 OTLP gRPC OTEL 追踪（沙箱生命周期）
-- 定时空闲沙箱清理会回收超时会话沙箱并输出审计日志
+这带来的好处：
 
-## SDK 集成
+- 工具语义覆盖核心能力（创建/执行/读取/写入/回滚/编排）
+- 请求发出前有参数校验，降低 Agent 调用歧义
+- 对 Agent 友好的 action 设计（包含显式 code_write 动作）
+- 如果你的平台偏好 MCP，也可直接切换 MCP 适配
 
-- **LangChain Tool 适配**：`sdk.SleighLangChainClient`
-- **MCP 适配**：`sdk.run_stdio_server`
-- 文档：`sdks/python_sdk/README.md`
+最小 LangChain Tool 接入示例：
+
+```python
+from sdk import SleighLangChainClient
+
+client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
+tool = client.get_sleigh_runtime_tool()
+
+# 将 tool 注入你的 Agent 工具列表即可。
+```
+
+更完整的 Agent 友好示例见：
+`examples/langchain_sleigh_runtime_tool.py`
+
+## 超时、镜像拉取与自动扩容控制
+
+## 说明与限制
+
+- code_write 的 `build_language` 可选；若服务端缺少对应镜像，会先拉取，导致耗时增加。
+- 挂载模式设计为只读（`ro`）。
+- 环境拷贝通过白名单根目录控制宿主机访问边界。
+
+## 延伸文档
+
+- SDK 文档：`sdks/python_sdk/README.md`
+- LangChain 示例：`examples/langchain_sleigh_runtime_tool.py`
+- MCP stdio 示例：`examples/mcp_sleigh_runtime_server.py`

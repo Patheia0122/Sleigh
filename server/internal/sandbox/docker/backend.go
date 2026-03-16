@@ -43,6 +43,10 @@ func (b *Backend) Kind() string {
 	return "docker"
 }
 
+func (b *Backend) ImageExists(ctx context.Context, image string) (bool, error) {
+	return b.imageExists(ctx, strings.TrimSpace(image))
+}
+
 func (b *Backend) Create(ctx context.Context, req sandbox.CreateRequest) (sandbox.Metadata, error) {
 	image := strings.TrimSpace(req.Image)
 	if image == "" {

@@ -26,13 +26,23 @@ class SleighClient:
         timeout_seconds: float | None = None,
     ) -> Any:
         url = urljoin(self.base_url.rstrip("/") + "/", path.lstrip("/"))
-        response = requests.request(
-            method=method,
-            url=url,
-            params={k: v for k, v in (query or {}).items() if v is not None},
-            json=json_body,
-            timeout=self.timeout_seconds if timeout_seconds is None else timeout_seconds,
-        )
+        effective_timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
+        try:
+            response = requests.request(
+                method=method,
+                url=url,
+                params={k: v for k, v in (query or {}).items() if v is not None},
+                json=json_body,
+                timeout=effective_timeout,
+            )
+        except requests.exceptions.Timeout as exc:
+            raise SleighClientError(
+                "request timed out before server finished. "
+                "If this is a wait-style operation, increase wait_timeout_seconds in the action "
+                "or increase SLEIGH_RUNTIME_TIMEOUT_SECONDS (default 30)."
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise SleighClientError(f"{method} {path} request failed: {exc}") from exc
 
         if response.status_code >= 400:
             try:
@@ -60,6 +70,8 @@ class SleighClient:
         labels: dict[str, str] | None = None,
         memory_limit_mb: int | None = None,
         confirm_low_memory: bool | None = None,
+        auto_expand_memory: bool | None = None,
+        image_pull_policy: str | None = "notify",
         request_timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -72,6 +84,10 @@ class SleighClient:
             body["memory_limit_mb"] = memory_limit_mb
         if confirm_low_memory is not None:
             body["confirm_low_memory"] = confirm_low_memory
+        if auto_expand_memory is not None:
+            body["auto_expand_memory"] = auto_expand_memory
+        if image_pull_policy is not None:
+            body["image_pull_policy"] = image_pull_policy
         timeout_seconds = request_timeout_seconds
         if timeout_seconds is None:
             timeout_seconds = max(self.timeout_seconds, 180.0)
@@ -117,12 +133,15 @@ class SleighClient:
         )
 
     def rollback_snapshot(
-        self, *, session_token: str, sandbox_id: str, snapshot_id: str
+        self, *, session_token: str, sandbox_id: str, snapshot_id: str, auto_expand: bool | None = None
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {"session_token": session_token, "snapshot_id": snapshot_id}
+        if auto_expand is not None:
+            body["auto_expand"] = auto_expand
         return self._request(
             "POST",
             f"/sandboxes/{sandbox_id}/rollback",
-            json_body={"session_token": session_token, "snapshot_id": snapshot_id},
+            json_body=body,
         )
 
     def exec_command(
@@ -133,6 +152,7 @@ class SleighClient:
         command: str,
         wait: bool | None = None,
         wait_timeout_seconds: int | None = None,
+        request_timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"session_token": session_token, "command": command}
         if wait is not None:
@@ -143,6 +163,7 @@ class SleighClient:
             "POST",
             f"/sandboxes/{sandbox_id}/exec",
             json_body=body,
+            timeout_seconds=request_timeout_seconds,
         )
 
     def get_exec(
@@ -239,12 +260,22 @@ class SleighClient:
         )
 
     def expand_memory(
-        self, *, session_token: str, sandbox_id: str, target_mb: int
+        self,
+        *,
+        session_token: str,
+        sandbox_id: str,
+        target_mb: int | None = None,
+        auto_expand: bool | None = None,
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {"session_token": session_token}
+        if target_mb is not None:
+            body["target_mb"] = target_mb
+        if auto_expand is not None:
+            body["auto_expand"] = auto_expand
         return self._request(
             "POST",
             f"/sandboxes/{sandbox_id}/memory/expand",
-            json_body={"session_token": session_token, "target_mb": target_mb},
+            json_body=body,
         )
 
     def list_session_exec_tasks(

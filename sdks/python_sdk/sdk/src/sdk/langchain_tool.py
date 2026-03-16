@@ -66,11 +66,19 @@ class SleighToolInput(BaseModel):
         None,
         description="Confirm sandbox create when host available memory ratio is between 10% and 15%.",
     )
+    auto_expand_memory: bool | None = Field(
+        None,
+        description="For create_sandbox: enable auto-expand label for future elastic operations.",
+    )
+    image_pull_policy: Literal["wait", "notify"] | None = Field(
+        "notify",
+        description="For create_sandbox: notify(default in SDK) or wait to perform image pull in current request.",
+    )
     request_timeout_seconds: float | None = Field(
         None,
         ge=1,
         le=3600,
-        description="Optional HTTP timeout override for create_sandbox.",
+        description="Optional HTTP timeout override for create_sandbox/exec_command.",
     )
     session_id: str | None = Field(None, description="Session id for session history query.")
     limit: int = Field(20, ge=1, le=200, description="Pagination page size.")
@@ -90,6 +98,10 @@ class SleighToolInput(BaseModel):
     max_output_bytes: int | None = Field(None, ge=1, le=1048576, description="Max captured bytes per stream.")
     max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
+    auto_expand: bool | None = Field(
+        None,
+        description="For expand_memory/rollback_snapshot: trigger automatic elastic memory expansion.",
+    )
     write_mode: Literal["context_edit", "replace_file"] | None = Field(
         None,
         description=(
@@ -148,6 +160,9 @@ class SleighToolInput(BaseModel):
                     raise ValueError("environment_path is required when action=copy_environment")
                 if self.sandbox_path is None or self.sandbox_path.strip() == "":
                     raise ValueError("sandbox_path is required when action=copy_environment")
+            if self.action == "expand_memory":
+                if self.target_mb is None and not self.auto_expand:
+                    raise ValueError("target_mb is required when action=expand_memory unless auto_expand=true")
             return self
         mode = (self.write_mode or "context_edit").strip()
         if self.action == "code_write_context_edit":
@@ -189,6 +204,8 @@ class SleighLangChainClient:
                 image=data.image,
                 memory_limit_mb=data.memory_limit_mb,
                 confirm_low_memory=data.confirm_low_memory,
+                auto_expand_memory=data.auto_expand_memory,
+                image_pull_policy=data.image_pull_policy,
                 request_timeout_seconds=data.request_timeout_seconds,
             )
         if action == "list_sandboxes":
@@ -206,14 +223,21 @@ class SleighLangChainClient:
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
                 snapshot_id=_require(data.snapshot_id, "snapshot_id"),
+                auto_expand=data.auto_expand,
             )
         if action == "exec_command":
+            request_timeout_seconds = data.request_timeout_seconds
+            if request_timeout_seconds is None:
+                wait_seconds = data.wait_timeout_seconds or 0
+                if wait_seconds > 0:
+                    request_timeout_seconds = max(self.client.timeout_seconds, float(wait_seconds+5))
             return self.client.exec_command(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
                 command=_require(data.command, "command"),
                 wait=data.wait,
                 wait_timeout_seconds=data.wait_timeout_seconds,
+                request_timeout_seconds=request_timeout_seconds,
             )
         if action == "get_exec":
             return self.client.get_exec(
@@ -261,7 +285,8 @@ class SleighLangChainClient:
             return self.client.expand_memory(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
-                target_mb=int(_require(data.target_mb, "target_mb")),
+                target_mb=int(data.target_mb) if data.target_mb is not None else None,
+                auto_expand=data.auto_expand,
             )
         if action == "list_session_exec_tasks":
             return self.client.list_session_exec_tasks(
@@ -349,6 +374,26 @@ class SleighLangChainClient:
             name=name,
             description=description,
             args_schema=SleighToolInput,
+            return_direct=return_direct,
+            handle_tool_error=handle_tool_error,
+        )
+
+    def get_sleigh_runtime_tool(
+        self,
+        name: str = "sleigh_runtime",
+        description: str | None = None,
+        return_direct: bool = False,
+        handle_tool_error: bool = True,
+    ):
+        """Return a LangChain StructuredTool with Agent-friendly defaults.
+
+        Defaults are tuned for common Agent integration:
+        - name: sleigh_runtime
+        - return_direct: False
+        """
+        return self.as_langchain_tool(
+            name=name,
+            description=description,
             return_direct=return_direct,
             handle_tool_error=handle_tool_error,
         )

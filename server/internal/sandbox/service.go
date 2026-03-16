@@ -228,6 +228,18 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Metadata, erro
 	return meta, nil
 }
 
+func (s *Service) IsCreateImageCached(ctx context.Context, image string) (bool, string, error) {
+	if s.backend == nil {
+		return false, "", fmt.Errorf("sandbox service not initialized")
+	}
+	normalizedImage, _ := s.normalizeCreateDefaults(CreateRequest{Image: image})
+	exists, err := s.backend.ImageExists(ctx, normalizedImage)
+	if err != nil {
+		return false, normalizedImage, err
+	}
+	return exists, normalizedImage, nil
+}
+
 func (s *Service) Get(ctx context.Context, sandboxID string) (Metadata, error) {
 	if s.backend == nil || s.store == nil {
 		return Metadata{}, fmt.Errorf("sandbox service not initialized")
@@ -551,6 +563,16 @@ func (s *Service) ExpandMemory(ctx context.Context, sandboxID string, targetMB i
 		return AutoExpandResult{}, appErr.ErrBadRequest
 	}
 	return s.backend.ExpandMemory(ctx, sandboxID, targetMB)
+}
+
+func (s *Service) AutoExpandMemory(ctx context.Context, sandboxID string) (AutoExpandResult, error) {
+	if s.backend == nil || s.store == nil {
+		return AutoExpandResult{}, fmt.Errorf("sandbox service not initialized")
+	}
+	if _, err := s.store.GetSandbox(ctx, sandboxID); err != nil {
+		return AutoExpandResult{}, err
+	}
+	return s.backend.EmergencyExpand(ctx, sandboxID)
 }
 
 func (s *Service) EnsureRunning(ctx context.Context, sandboxID string) error {

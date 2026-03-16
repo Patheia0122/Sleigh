@@ -65,6 +65,7 @@ type MountSpec struct {
 
 type Backend interface {
 	Kind() string
+	ImageExists(ctx context.Context, image string) (bool, error)
 	Create(ctx context.Context, req CreateRequest) (Metadata, error)
 	Get(ctx context.Context, id string) (Metadata, error)
 	Delete(ctx context.Context, id string) error
