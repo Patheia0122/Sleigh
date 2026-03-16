@@ -209,7 +209,7 @@ tool = client.get_sleigh_runtime_tool()
 
 ## 延伸文档
 
-- 全量 API 参考（英文）：`docs/code_write_api.md`
+- 全量 API 参考（英文）：`docs/api_reference.md`
 - SDK 文档：`sdks/python_sdk/README.md`
 - LangChain 示例：`examples/langchain_sleigh_runtime_tool.py`
 - MCP stdio 示例：`examples/mcp_sleigh_runtime_server.py`

@@ -210,7 +210,7 @@ More complete Agent-friendly example:
 
 ## More Docs
 
-- Full API reference: `docs/code_write_api.md`
+- Full API reference: `docs/api_reference.md`
 - SDK docs: `sdks/python_sdk/README.md`
 - LangChain example: `examples/langchain_sleigh_runtime_tool.py`
 - MCP stdio example: `examples/mcp_sleigh_runtime_server.py`
