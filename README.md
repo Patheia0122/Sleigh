@@ -6,15 +6,15 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
 ![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go)
 
-![Sleigh Logo](docs/assets/Sleigh_logo.png)
-
 ## Sleigh is a self-hosted sandbox runtime for Agents with elasticity and strong filesystem state
 
 Run the Sleigh server on a single high-resource machine, then let multiple Agents use the Sleigh client to get sandboxes with strong filesystem state and elastic memory expansion.
 
 ---
 
-## Why Choose Sleigh
+![Sleigh Logo](docs/assets/Sleigh_logo.png)
+
+## What Sleigh Provides
 
 Sleigh is for teams that want cloud-sandbox-like capabilities but already have a high-resource local server, want to avoid cloud lock-in, or need to keep data in-network.
 
@@ -119,7 +119,7 @@ curl -sS -X POST "http://127.0.0.1:10122/sandboxes/$SANDBOX_ID/exec" \
 ### Option B: Python SDK
 
 ```python
-from sdk import SleighClient
+from sleigh_sdk import SleighClient
 
 client = SleighClient(base_url="http://127.0.0.1:10122")
 token = client.create_session_token()["session_token"]
@@ -147,6 +147,7 @@ print(result)
 
 ## Core API
 
+Core control-plane endpoints exposed by the Sleigh server.
 - `POST /sessions/token`: issue session token
 - `POST /sandboxes`: create sandbox
 - `GET /sandboxes`: list session sandboxes
@@ -155,7 +156,7 @@ print(result)
 - `POST /sandboxes/{id}/snapshots`: create snapshot
 - `POST /sandboxes/{id}/rollback`: rollback snapshot
 - `POST /sandboxes/{id}/ops/read`: read operation (allowlisted commands)
-- `POST /sandboxes/{id}/ops/code/write`: AI coding endpoint with format/lint checks and optional build verification
+- `POST /sandboxes/{id}/ops/code/write`: AI coding endpoint with formatting/lint checks and optional build verification
 - `POST /sandboxes/{id}/environment/copy`: copy environment-zone directory into sandbox
 
 ## Runtime Model
@@ -187,7 +188,7 @@ Benefits:
 Minimal LangChain Tool example:
 
 ```python
-from sdk import SleighLangChainClient
+from sleigh_sdk import SleighLangChainClient
 
 client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
 tool = client.get_sleigh_runtime_tool()
@@ -198,17 +199,17 @@ tool = client.get_sleigh_runtime_tool()
 More complete Agent-friendly example:
 `examples/langchain_sleigh_runtime_tool.py`
 
-## Timeout, Image Pull, and Auto-Expand Controls
-
 ## Notes and Limits
 
 - `build_language` in code_write is optional; if the server lacks the required image, it will pull first and increase latency.
 - Mount mode is read-only (`ro`) by design.
 - Environment copy is guarded by allowlisted root boundaries.
+- Requires Linux host
+- Currently Docker runtime only
+- Sandboxes share host kernel
 
 ## More Docs
 
 - SDK docs: `sdks/python_sdk/README.md`
 - LangChain example: `examples/langchain_sleigh_runtime_tool.py`
 - MCP stdio example: `examples/mcp_sleigh_runtime_server.py`
-

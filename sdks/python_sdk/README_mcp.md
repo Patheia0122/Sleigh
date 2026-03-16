@@ -10,7 +10,7 @@ pip install ".[mcp]"
 Run stdio MCP server:
 
 ```python
-from sdk import run_stdio_server
+from sleigh_sdk import run_stdio_server
 
 run_stdio_server(base_url="http://127.0.0.1:10122")
 ```
@@ -18,7 +18,7 @@ run_stdio_server(base_url="http://127.0.0.1:10122")
 Or build explicitly:
 
 ```python
-from sdk import build_mcp_server
+from sleigh_sdk import build_mcp_server
 
 mcp = build_mcp_server(base_url="http://127.0.0.1:10122")
 mcp.run()

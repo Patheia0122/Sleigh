@@ -27,7 +27,7 @@ pip install "sleigh-sdk[mcp]"
 ## 2. Base Python Client
 
 ```python
-from sdk import SleighClient
+from sleigh_sdk import SleighClient
 
 client = SleighClient(base_url="http://127.0.0.1:10122")
 session_token = client.create_session_token()["session_token"]

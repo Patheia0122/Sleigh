@@ -10,7 +10,7 @@ pip install ".[langchain]"
 Usage:
 
 ```python
-from sdk import SleighLangChainClient
+from sleigh_sdk import SleighLangChainClient
 
 client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
 tool = client.as_langchain_tool()

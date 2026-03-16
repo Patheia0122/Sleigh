@@ -7,7 +7,7 @@ Only one prerequisite:
 
 import os
 
-from sdk import SleighLangChainClient
+from sleigh_sdk import SleighLangChainClient
 
 
 def build_tool():

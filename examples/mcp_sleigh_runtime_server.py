@@ -22,7 +22,7 @@ import json
 import os
 import sys
 
-from sdk import SleighClient, run_stdio_server
+from sleigh_sdk import SleighClient, run_stdio_server
 
 
 def _runtime_config() -> tuple[str, float]:
