@@ -338,9 +338,9 @@ class SleighLangChainClient:
 
     def as_langchain_tool(
         self,
-        name: str = "sleigh-runtime",
+        name: str = "sleigh_runtime",
         description: str | None = None,
-        return_direct: bool = True,
+        return_direct: bool = False,
         handle_tool_error: bool = True,
     ):
         try:
@@ -377,27 +377,6 @@ class SleighLangChainClient:
             return_direct=return_direct,
             handle_tool_error=handle_tool_error,
         )
-
-    def get_sleigh_runtime_tool(
-        self,
-        name: str = "sleigh_runtime",
-        description: str | None = None,
-        return_direct: bool = False,
-        handle_tool_error: bool = True,
-    ):
-        """Return a LangChain StructuredTool with Agent-friendly defaults.
-
-        Defaults are tuned for common Agent integration:
-        - name: sleigh_runtime
-        - return_direct: False
-        """
-        return self.as_langchain_tool(
-            name=name,
-            description=description,
-            return_direct=return_direct,
-            handle_tool_error=handle_tool_error,
-        )
-
 
 def _require(value, field_name: str):
     if value is None:

@@ -13,10 +13,16 @@ Usage:
 from sleigh_sdk import SleighLangChainClient
 
 client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
-tool = client.as_langchain_tool()
+tool = client.as_langchain_tool(
+    name="sleigh_runtime",
+    return_direct=False,
+    handle_tool_error=True,
+)
 ```
 
 The returned tool uses `StructuredTool` and unified `SleighToolInput`.
+For the latest runnable wrapper style, follow:
+`examples/langchain_sleigh_runtime_tool.py`
 
 AI coding related actions included in `SleighToolInput.action`:
 

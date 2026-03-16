@@ -300,8 +300,23 @@ func (r *Router) createSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 	if imagePullPolicy == "notify" {
-		cached, resolvedImage, cacheErr := r.service.IsCreateImageCached(req.Context(), body.Image)
+		cacheCheckCtx, cacheCheckCancel := context.WithTimeout(req.Context(), 3*time.Second)
+		defer cacheCheckCancel()
+		cached, resolvedImage, cacheErr := r.service.IsCreateImageCached(cacheCheckCtx, body.Image)
+		if strings.TrimSpace(resolvedImage) == "" {
+			resolvedImage = strings.TrimSpace(body.Image)
+		}
 		if cacheErr != nil {
+			if errors.Is(cacheCheckCtx.Err(), context.DeadlineExceeded) || strings.Contains(strings.ToLower(cacheErr.Error()), "context deadline exceeded") {
+				writeJSON(w, stdhttp.StatusConflict, map[string]any{
+					"error":                 fmt.Sprintf("image cache check for %q timed out; treating image pull as needed", resolvedImage),
+					"image_pull_needed":     true,
+					"resolved_image":        resolvedImage,
+					"cache_check_timed_out": true,
+					"next_action":           "retry create_sandbox with image_pull_policy=wait to perform pull",
+				})
+				return
+			}
 			writeDomainError(w, cacheErr)
 			return
 		}

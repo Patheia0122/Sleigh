@@ -191,7 +191,7 @@ Minimal LangChain Tool example:
 from sleigh_sdk import SleighLangChainClient
 
 client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
-tool = client.get_sleigh_runtime_tool()
+tool = client.as_langchain_tool()
 
 # Inject `tool` into your Agent tool list.
 ```

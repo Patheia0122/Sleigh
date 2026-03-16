@@ -191,7 +191,7 @@ Sleigh 的 SDK 重点支持把能力直接作为 LangChain Tool 提供给 Agent�
 from sleigh_sdk import SleighLangChainClient
 
 client = SleighLangChainClient(base_url="http://127.0.0.1:10122")
-tool = client.get_sleigh_runtime_tool()
+tool = client.as_langchain_tool()
 
 # 将 tool 注入你的 Agent 工具列表即可。
 ```
