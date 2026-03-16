@@ -1,135 +1,397 @@
-# Code Write 接口详解
+# Sleigh Runtime API Reference
 
-本文档详细说明 Sleigh 的代码写入接口：
+This document is the detailed English reference for the Sleigh HTTP API.
+It covers all public endpoints currently registered by the server router.
 
+## Base URL
+
+- Default local address: `http://127.0.0.1:10122`
+
+## Authentication Model
+
+- Most control-plane endpoints require `session_token`.
+- `session_token` can be provided in either:
+  - request JSON body as `session_token`, or
+  - query string as `?session_token=...` (mainly for GET endpoints).
+- `POST /sessions/token` is the token-issuing endpoint.
+- Authorization is sandbox-scoped: access to a `sandbox_id` is validated against the token owner.
+
+## Response and Error Conventions
+
+- Success responses are JSON unless noted (for example `204 No Content`).
+- Errors follow:
+
+```json
+{
+  "error": "human-readable message"
+}
+```
+
+- Typical status codes:
+  - `200 OK`: successful read/update/list operations
+  - `201 Created`: token/sandbox/snapshot creation, mount create
+  - `204 No Content`: successful delete/unmount
+  - `400 Bad Request`: malformed JSON, missing required fields, invalid params
+  - `403 Forbidden`: token does not own the requested sandbox/session resource
+  - `404 Not Found`: resource missing
+  - `409 Conflict`: semantic conflicts (for example low-memory confirmation required, image pull notify mode)
+  - `503 Service Unavailable`: blocked by host constraints (for example low memory)
+
+## Endpoint Index
+
+### Health and Diagnostics
+
+- `GET /healthz`
+- `GET /resources`
+- `GET /diagnostics/oom`
+
+### Session
+
+- `POST /sessions/token`
+- `GET /sessions/{sessionId}/exec-tasks`
+- `POST /maintenance/exec-tasks/cleanup`
+
+### Sandbox Lifecycle
+
+- `POST /sandboxes`
+- `GET /sandboxes`
+- `GET /sandboxes/{id}`
+- `DELETE /sandboxes/{id}`
+
+### Snapshot
+
+- `POST /sandboxes/{id}/snapshots`
+- `GET /sandboxes/{id}/snapshots`
+- `POST /sandboxes/{id}/rollback`
+
+### Command Execution
+
+- `POST /sandboxes/{id}/exec`
+- `GET /sandboxes/{id}/exec/{execId}`
+- `POST /sandboxes/{id}/exec/{execId}/cancel`
+
+### Memory
+
+- `GET /sandboxes/{id}/memory/pressure`
+- `POST /sandboxes/{id}/memory/expand`
+
+### Mount and Environment
+
+- `GET /mounts/workspaces`
+- `GET /environments/workspaces`
+- `GET /sandboxes/{id}/mounts`
+- `POST /sandboxes/{id}/mounts`
+- `DELETE /sandboxes/{id}/mounts/{mountId}`
+- `POST /sandboxes/{id}/environment/copy`
+
+### Agent-Oriented Ops
+
+- `POST /sandboxes/{id}/ops/read`
 - `POST /sandboxes/{id}/ops/code/write`
+- `POST /workflow/run`
 
-该接口用于在指定沙箱内进行 AI 编程写入，支持局部修改与整文件覆盖，并可选执行构建校验。
+### Warm Pool
 
-## 1. 核心语义
+- `GET /warm-pool`
+- `POST /warm-pool/refill`
 
-- 操作对象是**沙箱内文件**（不是直接改宿主机代码仓库）。
-- 服务端会在受控流程中完成文件同步、修改、回写与检查。
-- 请求必须携带 `session_token` 并通过沙箱访问鉴权。
+---
 
-## 2. 路径与模式
+## Detailed Endpoints
 
-### 2.1 目标路径
+### 1) `GET /healthz`
 
-- `sandbox_path`：沙箱内目标文件绝对路径（必填）
-- 不允许使用根路径 `/`，也不允许系统敏感路径（如 `/proc`、`/sys`、`/dev`）
+Returns server liveness and runtime metadata.
 
-### 2.2 写入模式
+Response fields:
+- `status`
+- `time` (RFC3339 UTC)
+- `version`
+- `sandbox_kind`
 
-- `write_mode=context_edit`（默认）
-  - 适合局部修改
-  - 关键字段：`old_text`、`new_text`
-  - 可选辅助字段：`before_context`、`after_context`、`occurrence`
-- `write_mode=replace_file`
-  - 适合整文件重写
-  - 关键字段：`content`
+### 2) `GET /resources`
 
-## 3. 请求体字段
+Returns host resource report (from monitor service), including memory/cpu/disk metrics used by admission checks.
 
-通用字段：
+### 3) `GET /diagnostics/oom`
 
-- `session_token`：会话令牌（必填）
-- `sandbox_path`：目标文件绝对路径（必填）
-- `write_mode`：`context_edit` 或 `replace_file`（可选，默认 `context_edit`）
-- `build_language`：可选构建语言（如 `go/python/node/rust/java`）
-- `timeout_seconds`：接口整体超时（可选）
-- `max_output_bytes`：输出截断字节上限（可选）
-- `max_lines`：输出截断行数上限（可选）
+Returns OOM diagnostics report from monitor service.
 
-`context_edit` 专属字段：
+### 4) `POST /sessions/token`
 
-- `old_text`：要替换的原始片段（必填）
-- `new_text`：替换后的片段（必填）
-- `before_context`：前置上下文（可选）
-- `after_context`：后置上下文（可选）
-- `occurrence`：命中序号（1 开始，可选）
+Issues a new session token.
 
-`replace_file` 专属字段：
+Response example:
 
-- `content`：整文件新内容（必填，可为空字符串）
+```json
+{
+  "session_token": "sess_xxx",
+  "issued_at": "2026-03-16T09:00:00Z"
+}
+```
 
-## 4. 响应结构
+### 5) `POST /sandboxes`
 
-统一返回 AI 友好 envelope，常见字段：
+Creates a sandbox.
 
-- `status`：`ok` / `error`
-- `duration_ms`
-- `timed_out`
-- `truncated`
-- `stdout`
-- `stderr`
-- `error`
+Request body:
+- `session_token` (required)
+- `image` (required by semantics; defaults are SDK-side)
+- `labels` (optional map)
+- `memory_limit_mb` (optional)
+- `confirm_low_memory` (optional, required when host free-memory ratio is in warning range)
+- `auto_expand_memory` (optional, stores auto-expand intent via sandbox label)
+- `image_pull_policy` (optional: `wait` or `notify`)
+
+Special behavior:
+- Host memory guard:
+  - `<10%` available: blocked with `503`
+  - `10%~15%`: returns conflict unless `confirm_low_memory=true`
+- `image_pull_policy=notify`:
+  - if image is not cached, returns `409` with:
+    - `image_pull_needed=true`
+    - `resolved_image`
+    - `next_action`
+
+### 6) `GET /sandboxes`
+
+Lists sandboxes owned by the current session.
+
+Auth:
+- `session_token` in query or JSON body.
+
+Response:
+- `{ "items": [...] }`
+
+### 7) `GET /sandboxes/{id}`
+
+Returns metadata for one sandbox (authorized by session ownership).
+
+### 8) `DELETE /sandboxes/{id}`
+
+Deletes a sandbox.
+
+Response:
+- `204 No Content` on success.
+
+### 9) `POST /sandboxes/{id}/snapshots`
+
+Creates a snapshot for sandbox filesystem/runtime state.
+
+### 10) `GET /sandboxes/{id}/snapshots`
+
+Lists snapshots for the sandbox.
+
+### 11) `POST /sandboxes/{id}/rollback`
+
+Rolls back sandbox to a snapshot.
+
+Request body:
+- `session_token` (required)
+- `snapshot_id` (required)
+- `auto_expand` (optional; triggers auto-expand flow when enabled)
+
+### 12) `POST /sandboxes/{id}/exec`
+
+Runs a command in sandbox.
+
+Request body:
+- `session_token` (required)
+- `command` (required)
+- `wait` (optional bool)
+- `wait_timeout_seconds` (optional int)
+
+Behavior:
+- If `wait=true`, endpoint can poll and return terminal result inline (or timeout envelope).
+- Otherwise returns async execution metadata (`exec_id` etc).
+
+### 13) `GET /sandboxes/{id}/exec/{execId}`
+
+Fetches execution status/result for one exec task.
+
+### 14) `POST /sandboxes/{id}/exec/{execId}/cancel`
+
+Cancels a running exec task.
+
+### 15) `GET /sessions/{sessionId}/exec-tasks`
+
+Lists historical exec tasks for the session.
+
+Auth and ownership:
+- Caller token must match `{sessionId}` (or use same value when omitted/derived).
+
+Query params:
+- `limit` (optional, default `20`)
+- `cursor` (optional)
+
+### 16) `POST /maintenance/exec-tasks/cleanup`
+
+Runs cleanup for stale execution task records.
+
+### 17) `GET /sandboxes/{id}/memory/pressure`
+
+Returns memory pressure details for the sandbox/host context.
+
+### 18) `POST /sandboxes/{id}/memory/expand`
+
+Expands sandbox memory.
+
+Request body:
+- `session_token` (required)
+- `target_mb` (required in manual mode; may be omitted/<=0 when `auto_expand=true`)
+- `auto_expand` (optional)
+
+Behavior:
+- Auto-expand still respects host guard:
+  - hard block below 10% free memory
+  - warning band below 15% can be surfaced in reason fields
+
+### 19) `GET /mounts/workspaces`
+
+Lists directories available under mount allowlist root.
+
+Response:
+- `allowed_root`
+- `items`
+
+### 20) `GET /environments/workspaces`
+
+Lists directories available under environment allowlist root.
+
+Response:
+- `allowed_root`
+- `items`
+
+### 21) `GET /sandboxes/{id}/mounts`
+
+Lists active mounts for sandbox.
+
+Response:
+- `{ "items": [...] }`
+
+### 22) `POST /sandboxes/{id}/mounts`
+
+Creates a mount into sandbox.
+
+Request body:
+- `session_token` (required)
+- `workspace_path` (required, resolved under mount allowlist root)
+- `container_path` (required absolute path in sandbox)
+
+Notes:
+- Server enforces read-only mode (`ro`) regardless of client preference.
+
+### 23) `DELETE /sandboxes/{id}/mounts/{mountId}`
+
+Unmounts one mount entry.
+
+Response:
+- `204 No Content`
+
+### 24) `POST /sandboxes/{id}/environment/copy`
+
+Copies a host directory (from environment allowlist zone) into sandbox path.
+
+Request body:
+- `session_token` (required)
+- `environment_path` (required; `workspace_path` accepted as backward-compatible alias)
+- `sandbox_path` (required absolute path inside sandbox)
+
+Behavior:
+- Validates source directory under `SERVER_ENV_ALLOWED_ROOT`.
+- Ensures sandbox is running and destination path exists (creates as needed).
+- Performs copy via controlled host-to-container flow.
+
+### 25) `POST /sandboxes/{id}/ops/read`
+
+Runs allowlisted read-only commands and returns AI-friendly output envelope.
+
+Request body:
+- `session_token` (required)
+- `command` (required, allowlisted)
+- `args` (optional)
+- `cwd` (optional)
+- `timeout_seconds` (optional)
+- `max_output_bytes` (optional)
+- `max_lines` (optional)
+- `output_offset` (optional)
+
+Response fields:
+- `status`, `duration_ms`, `timed_out`, `truncated`
+- `stdout`, `stderr`, `exit_code`, `error`
+- `omitted_bytes`, `next_offset`
+
+### 26) `POST /sandboxes/{id}/ops/code/write`
+
+AI-oriented code write endpoint for sandbox files, with optional quality/build checks.
+
+Request body:
+- Common:
+  - `session_token` (required)
+  - `sandbox_path` (required absolute sandbox file path)
+  - `write_mode` (`context_edit` default, or `replace_file`)
+  - `build_language` (optional: `go`, `python`, `node`, `rust`, `java`, ...)
+  - `timeout_seconds`, `max_output_bytes`, `max_lines` (optional)
+- `context_edit` mode:
+  - `old_text`, `new_text` (required)
+  - `before_context`, `after_context`, `occurrence` (optional)
+- `replace_file` mode:
+  - `content` (required; empty string is allowed)
+
+Response fields:
+- `status`, `duration_ms`, `timed_out`, `truncated`
+- `stdout`, `stderr`, `error`
 - `applied_files`
-- `format_issues`
-- `lint_issues`
-- `build_status`：`not_run` / `passed` / `failed`
+- `format_issues`, `lint_issues`
+- `build_status` (`not_run`, `passed`, `failed`)
 
-## 5. 质量检查与构建
+Quality/build semantics:
+- If `.pre-commit-config.yaml` exists in workspace, pre-commit is preferred.
+- If unavailable, language-specific fallback checks can run.
+- If `build_language` is provided, language build validation is executed.
+- Image/dependency pull failures are wrapped with actionable network/timeout error messages.
 
-- 若工作区存在 `.pre-commit-config.yaml`，优先执行 `pre-commit`。
-- 若不存在，则按代码语言自动执行兜底质量检查。
-- 当提供 `build_language` 时，会执行对应构建校验。
-- `build_language` 未提供时，`build_status=not_run`。
+### 27) `POST /workflow/run`
 
-## 6. 常见失败语义
+Runs an ordered multi-step workflow with fail-fast behavior.
 
-### 6.1 context_edit 未命中
+Request body:
+- `session_token` (required)
+- `steps` (required array)
 
-- 场景：`old_text` 在目标文件中找不到
-- 典型错误：`context_edit no_match`
-- 建议：先读取最新文件，再补充 `before_context/after_context` 缩小定位歧义
+Each step supports:
+- `action` (required)
+- `sandbox_id` (required for non-create actions)
+- optional fields per action:
+  - `image`, `labels`, `memory_limit_mb`
+  - `command`, `wait`, `wait_timeout_seconds`
+  - `snapshot_id`
 
-### 6.2 context_edit 多处命中
+Supported actions:
+- `create_sandbox`
+- `exec_command`
+- `create_snapshot`
+- `rollback_snapshot`
+- `delete_sandbox`
 
-- 场景：片段在文件中出现多次
-- 典型错误：`context_edit ambiguous_match`
-- 建议：补充上下文或指定 `occurrence`
+Response includes:
+- global workflow status and duration
+- ordered per-step result entries (`index`, `action`, `status`, `duration_ms`, optional ids, error/result payload)
 
-### 6.3 路径不合法
+### 28) `GET /warm-pool`
 
-- 场景：`sandbox_path` 非绝对路径、指向受限目录或根路径
-- 建议：改为沙箱内合法绝对文件路径
+Returns warm pool status/counters.
 
-### 6.4 构建失败
+### 29) `POST /warm-pool/refill`
 
-- 场景：代码或依赖不满足构建条件
-- 建议：根据 `stderr/error` 修正代码或依赖后重试
+Triggers warm pool refill and returns updated warm pool status/counters.
 
-## 7. 最小示例
+---
 
-### 7.1 局部修改（context_edit）
+## Agent Calling Recommendations
 
-```json
-{
-  "session_token": "sess_xxx",
-  "sandbox_path": "/app/main.py",
-  "write_mode": "context_edit",
-  "old_text": "print('hello')\n",
-  "new_text": "print('hello world')\n",
-  "build_language": "python"
-}
-```
-
-### 7.2 整文件覆盖（replace_file）
-
-```json
-{
-  "session_token": "sess_xxx",
-  "sandbox_path": "/app/main.py",
-  "write_mode": "replace_file",
-  "content": "print('fresh file')\n",
-  "build_language": "python"
-}
-```
-
-## 8. Agent 调用建议
-
-- 先读后写：先用读接口获取最新内容，再做 context_edit。
-- 小步提交：复杂修改拆成多次小修改，提升命中率与可恢复性。
-- 错误自适应：根据 `no_match/ambiguous_match` 自动调整上下文或 `occurrence`。
-- 需要编译保证时再传 `build_language`，避免不必要耗时。
+- Create and reuse one `session_token` per conversational/task context.
+- Prefer `ops/read` before `ops/code/write` for context-edit reliability.
+- Use small, incremental `context_edit` writes instead of large risky rewrites.
+- Use `build_language` only when compile/build signal is needed (to avoid extra image pull latency).
+- For create flows, handle `image_pull_policy=notify` conflict by retrying with `wait` when appropriate.
