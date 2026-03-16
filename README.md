@@ -14,6 +14,19 @@ Sleigh is an execution runtime for long-running, stateful, and resource-volatile
 It provides the control-plane primitives required to run sandboxed tasks safely, recover from failures,
 and keep execution loops stable at scale.
 
+## Self-hosted Positioning
+
+Sleigh is a **self-hosted runtime choice** designed for individuals and small-to-medium teams that already have a local high-resource server.
+Instead of binding sandbox execution to a managed cloud product, Sleigh lets you run one open-source sandbox server on your own machine
+and share it across your internal Agents.
+
+Why this matters:
+
+- **No cloud lock-in**: open-source and deployment-agnostic
+- **No product usage fees from Sleigh**: free to run on your own infrastructure
+- **Cost predictability**: avoids cloud sandbox bills that can become expensive under high resource consumption
+- **One local control plane for many Agents**: centralize isolation, execution, and recovery capabilities on your own server
+
 ## What Sleigh Solves
 
 - Isolates each agent session with sandbox-level access boundaries
