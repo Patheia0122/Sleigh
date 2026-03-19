@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from .client import SleighClient
 
+_MAX_TOOL_RESPONSE_CHARS = 12000
+
 
 class SleighToolInput(BaseModel):
     session_token: str | None = Field(
@@ -365,7 +367,7 @@ class SleighLangChainClient:
             try:
                 payload = SleighToolInput(**kwargs)
                 result = self._dispatch(payload)
-                return json.dumps(result, ensure_ascii=False)
+                return _truncate_for_agent(json.dumps(result, ensure_ascii=False))
             except Exception as exc:  # pragma: no cover
                 return f"sleigh sdk error: {exc}"
 
@@ -384,3 +386,9 @@ def _require(value, field_name: str):
     if isinstance(value, str) and value.strip() == "":
         raise ValueError(f"{field_name} is required for this action")
     return value
+
+
+def _truncate_for_agent(text: str) -> str:
+    if len(text) <= _MAX_TOOL_RESPONSE_CHARS:
+        return text
+    return text[:_MAX_TOOL_RESPONSE_CHARS] + "...(truncated)"

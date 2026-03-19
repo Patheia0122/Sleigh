@@ -9,7 +9,7 @@ import (
 const (
 	defaultHTTPAddr                   = ":10122"
 	defaultReadTimeout                = 10 * time.Second
-	defaultWriteTimeout               = 10 * time.Second
+	defaultWriteTimeout               = 6 * time.Minute
 	defaultShutdownTimeout            = 10 * time.Second
 	defaultVersion                    = "dev"
 	defaultDBPath                     = "./data/runtime.db"
