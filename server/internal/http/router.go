@@ -601,6 +601,7 @@ func (r *Router) execSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	result = clampExecResultOutput(result)
 	if !body.Wait {
 		writeJSON(w, stdhttp.StatusAccepted, result)
 		return
@@ -622,6 +623,7 @@ func (r *Router) execSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			current.ID,
 		)
 	}
+	current = clampExecResultOutput(current)
 	writeJSON(w, stdhttp.StatusOK, current)
 }
 
@@ -717,6 +719,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 				}
 				item.TimedOut = timedOut
 				if timedOut {
+					execResult = clampExecResultOutput(execResult)
 					item.Status = "timed_out"
 					item.Error = fmt.Sprintf(
 						"exec step timed out after %ds; call get_exec with exec_id=%s to continue polling",
@@ -732,6 +735,7 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 					break
 				}
 			}
+			execResult = clampExecResultOutput(execResult)
 			item.ExecID = execResult.ID
 			item.SandboxID = sandboxID
 			item.Result = execResult
@@ -1311,6 +1315,7 @@ func (r *Router) getExecResult(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
+	result = clampExecResultOutput(result)
 	writeJSON(w, stdhttp.StatusOK, result)
 }
 
@@ -1337,6 +1342,7 @@ func (r *Router) cancelExec(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 
+	result = clampExecResultOutput(result)
 	writeJSON(w, stdhttp.StatusOK, result)
 }
 
@@ -1406,7 +1412,7 @@ func (r *Router) expandMemory(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		result sandbox.AutoExpandResult
 		err    error
 	)
-	if autoExpandEnabled && body.TargetMB <= 0 {
+	if autoExpandEnabled {
 		result, err = r.service.AutoExpandMemory(req.Context(), sandboxID)
 	} else {
 		result, err = r.service.ExpandMemory(req.Context(), sandboxID, body.TargetMB)
@@ -1453,6 +1459,9 @@ func (r *Router) listSessionExecTasks(w stdhttp.ResponseWriter, req *stdhttp.Req
 	if err != nil {
 		writeDomainError(w, err)
 		return
+	}
+	for i := range page.Items {
+		page.Items[i] = clampExecResultOutput(page.Items[i])
 	}
 	writeJSON(w, stdhttp.StatusOK, page)
 }
@@ -1823,6 +1832,32 @@ func truncateLines(content string, maxLines int) (string, bool) {
 		return content, false
 	}
 	return strings.Join(lines[:maxLines], "\n"), true
+}
+
+const maxExecOutputTailLines = 100
+
+func truncateTailLinesWithNotice(content string, maxLines int, streamLabel string) (string, bool) {
+	if maxLines <= 0 || content == "" {
+		return content, false
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= maxLines {
+		return content, false
+	}
+	omitted := len(lines) - maxLines
+	tail := strings.Join(lines[omitted:], "\n")
+	prefix := fmt.Sprintf("...(truncated %s: omitted %d lines, showing last %d lines)\n", streamLabel, omitted, maxLines)
+	return prefix + tail, true
+}
+
+func clampExecResultOutput(result sandbox.ExecResult) sandbox.ExecResult {
+	stdout, stdoutCut := truncateTailLinesWithNotice(result.Stdout, maxExecOutputTailLines, "stdout")
+	stderr, stderrCut := truncateTailLinesWithNotice(result.Stderr, maxExecOutputTailLines, "stderr")
+	if stdoutCut || stderrCut {
+		result.Stdout = stdout
+		result.Stderr = stderr
+	}
+	return result
 }
 
 func applyOutputLimits(content string, maxBytes int, maxLines int) (string, int64, bool) {
