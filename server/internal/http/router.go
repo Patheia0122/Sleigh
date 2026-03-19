@@ -1553,6 +1553,17 @@ func (r *Router) listMountWorkspaces(w stdhttp.ResponseWriter, req *stdhttp.Requ
 		"entries":       entries,
 		"truncated":     truncated,
 		"omitted_count": omittedCount,
+		"suggested_next_actions": []map[string]any{
+			{
+				"action": "mount_path",
+				"required_fields": []string{
+					"session_token",
+					"sandbox_id",
+					"workspace_path",
+					"container_path",
+				},
+			},
+		},
 	})
 }
 
@@ -1573,6 +1584,17 @@ func (r *Router) listEnvironmentWorkspaces(w stdhttp.ResponseWriter, req *stdhtt
 		"entries":       entries,
 		"truncated":     truncated,
 		"omitted_count": omittedCount,
+		"suggested_next_actions": []map[string]any{
+			{
+				"action": "copy_environment",
+				"required_fields": []string{
+					"session_token",
+					"sandbox_id",
+					"environment_path",
+					"sandbox_path",
+				},
+			},
+		},
 	})
 }
 

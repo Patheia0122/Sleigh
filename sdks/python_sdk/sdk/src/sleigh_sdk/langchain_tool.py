@@ -41,7 +41,13 @@ class SleighToolInput(BaseModel):
         "code_write",
         "code_write_context_edit",
         "code_write_replace_file",
-    ] = Field(..., description="Runtime action name to execute.")
+    ] = Field(
+        ...,
+        description=(
+            "Runtime action name to execute. "
+            "Use list_environment_workspaces before copy_environment, and list_mount_workspaces before mount_path."
+        ),
+    )
     sandbox_id: str | None = Field(None, description="Sandbox identifier.")
     snapshot_id: str | None = Field(None, description="Snapshot identifier.")
     exec_id: str | None = Field(None, description="Execution identifier.")
@@ -54,11 +60,17 @@ class SleighToolInput(BaseModel):
     image: str = Field("python:3.11-slim", description="Container image when creating a sandbox.")
     workspace_path: str | None = Field(
         None,
-        description="Mount-zone path relative to SERVER_MOUNT_ALLOWED_ROOT (leading '/' allowed).",
+        description=(
+            "For mount_path only: mount-zone path relative to SERVER_MOUNT_ALLOWED_ROOT "
+            "(leading '/' allowed). Do NOT use environment_path here."
+        ),
     )
     environment_path: str | None = Field(
         None,
-        description="Environment-zone path relative to SERVER_ENV_ALLOWED_ROOT (leading '/' allowed).",
+        description=(
+            "For copy_environment only: environment-zone path relative to SERVER_ENV_ALLOWED_ROOT "
+            "(leading '/' allowed)."
+        ),
     )
     container_path: str | None = Field(None, description="Container mount path.")
     mode: str = Field("ro", description="Mount mode. Server currently enforces read-only mounts.")
@@ -138,7 +150,7 @@ class SleighToolInput(BaseModel):
     )
     sandbox_path: str | None = Field(
         None,
-        description="Absolute target file path inside sandbox for code_write.",
+        description="Absolute target path inside sandbox (for code_write target file or copy_environment destination).",
     )
     build_language: str | None = Field(
         None,
@@ -162,6 +174,14 @@ class SleighToolInput(BaseModel):
                     raise ValueError("environment_path is required when action=copy_environment")
                 if self.sandbox_path is None or self.sandbox_path.strip() == "":
                     raise ValueError("sandbox_path is required when action=copy_environment")
+            if self.action == "mount_path":
+                if self.workspace_path is None or self.workspace_path.strip() == "":
+                    if self.environment_path is not None and self.environment_path.strip() != "":
+                        raise ValueError(
+                            "workspace_path is required when action=mount_path. "
+                            "environment_path is for action=copy_environment."
+                        )
+                    raise ValueError("workspace_path is required when action=mount_path")
             if self.action == "expand_memory":
                 if self.target_mb is None and not self.auto_expand:
                     raise ValueError("target_mb is required when action=expand_memory unless auto_expand=true")
@@ -357,6 +377,7 @@ class SleighLangChainClient:
                 "Sleigh runtime unified tool. "
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
                 "First call action=create_session_token, then pass session_token to other actions. "
+                "Use action=list_mount_workspaces before mount_path, and action=list_environment_workspaces before copy_environment. "
                 "For run_workflow, every step must include sandbox_id. "
                 "For code_write, default mode is context_edit; "
                 "prefer action=code_write_context_edit (sandbox_path+old_text+new_text) "
