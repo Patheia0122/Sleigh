@@ -867,42 +867,77 @@ func resolveWorkspacePath(allowedRoot, workspacePath string) (string, error) {
 	return resolved, nil
 }
 
-func listWorkspaceDirectories(root string) ([]string, error) {
+type workspaceEntry struct {
+	Path               string `json:"path"`
+	EnvReadme          string `json:"env_readme,omitempty"`
+	EnvReadmeTruncated bool   `json:"env_readme_truncated,omitempty"`
+}
+
+const (
+	maxWorkspaceListEntries = 200
+	maxEnvReadmeChars       = 1200
+)
+
+func listWorkspaceDirectories(root string, includeEnvReadme bool) ([]string, []workspaceEntry, bool, int, error) {
 	root = strings.TrimSpace(root)
 	if root == "" || !filepath.IsAbs(root) {
-		return nil, errors.New("server allowed root is invalid")
+		return nil, nil, false, 0, errors.New("server allowed root is invalid")
 	}
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, fmt.Errorf("mount root not accessible: %w", err)
+		return nil, nil, false, 0, fmt.Errorf("mount root not accessible: %w", err)
 	}
 	if !info.IsDir() {
-		return nil, errors.New("mount root is not a directory")
+		return nil, nil, false, 0, errors.New("mount root is not a directory")
+	}
+
+	dirs, err := os.ReadDir(root)
+	if err != nil {
+		return nil, nil, false, 0, fmt.Errorf("read mount root failed: %w", err)
 	}
 	items := []string{"/"}
-	err = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
+	entries := []workspaceEntry{{Path: "/"}}
+	truncated := false
+	omittedCount := 0
+
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
 		}
-		if path == root || !d.IsDir() {
-			return nil
+		if len(entries) >= maxWorkspaceListEntries {
+			truncated = true
+			omittedCount++
+			continue
 		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return nil
+		rel := "/" + strings.TrimPrefix(filepath.ToSlash(strings.TrimSpace(d.Name())), "/")
+		items = append(items, rel)
+		entry := workspaceEntry{Path: rel}
+		if includeEnvReadme {
+			readmePath := filepath.Join(root, d.Name(), "env_readme.md")
+			readmeBytes, readErr := os.ReadFile(readmePath)
+			if readErr == nil {
+				readmeText := strings.TrimSpace(string(readmeBytes))
+				if readmeText != "" {
+					readmeText, readmeTruncated := truncateWithEllipsis(readmeText, maxEnvReadmeChars)
+					entry.EnvReadme = readmeText
+					entry.EnvReadmeTruncated = readmeTruncated
+				}
+			}
 		}
-		rel = filepath.ToSlash(rel)
-		rel = strings.TrimSpace(rel)
-		if rel == "" || rel == "." {
-			return nil
-		}
-		items = append(items, "/"+strings.TrimPrefix(rel, "/"))
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		entries = append(entries, entry)
 	}
-	return items, nil
+	return items, entries, truncated, omittedCount, nil
+}
+
+func truncateWithEllipsis(input string, maxChars int) (string, bool) {
+	if maxChars <= 0 {
+		return "", input != ""
+	}
+	runes := []rune(input)
+	if len(runes) <= maxChars {
+		return input, false
+	}
+	return string(runes[:maxChars]) + "...", true
 }
 
 func normalizeSandboxCopyPath(raw string) (string, error) {
@@ -1507,14 +1542,17 @@ func (r *Router) listMountWorkspaces(w stdhttp.ResponseWriter, req *stdhttp.Requ
 		return
 	}
 	root := strings.TrimSpace(r.config.MountAllowedRoot)
-	items, err := listWorkspaceDirectories(root)
+	items, entries, truncated, omittedCount, err := listWorkspaceDirectories(root, false)
 	if err != nil {
 		writeError(w, stdhttp.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, stdhttp.StatusOK, map[string]any{
-		"allowed_root": root,
-		"items":        items,
+		"allowed_root":  root,
+		"items":         items,
+		"entries":       entries,
+		"truncated":     truncated,
+		"omitted_count": omittedCount,
 	})
 }
 
@@ -1524,14 +1562,17 @@ func (r *Router) listEnvironmentWorkspaces(w stdhttp.ResponseWriter, req *stdhtt
 		return
 	}
 	root := strings.TrimSpace(r.config.EnvironmentAllowedRoot)
-	items, err := listWorkspaceDirectories(root)
+	items, entries, truncated, omittedCount, err := listWorkspaceDirectories(root, true)
 	if err != nil {
 		writeError(w, stdhttp.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, stdhttp.StatusOK, map[string]any{
-		"allowed_root": root,
-		"items":        items,
+		"allowed_root":  root,
+		"items":         items,
+		"entries":       entries,
+		"truncated":     truncated,
+		"omitted_count": omittedCount,
 	})
 }
 
