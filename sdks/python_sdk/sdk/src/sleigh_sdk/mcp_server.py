@@ -112,6 +112,24 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         return client.get_exec(session_token=session_token, sandbox_id=sandbox_id, exec_id=exec_id)
 
     @mcp.tool()
+    def subscribe_exec_webhook(
+        session_token: Annotated[str, Field(description="Session token from create_session_token.")],
+        sandbox_id: Annotated[str, Field(description="Target sandbox_id for this execution task.")],
+        exec_id: Annotated[str, Field(description="Execution id returned by exec_command.")],
+        webhook_url: Annotated[
+            str,
+            Field(description="Webhook callback URL. Server posts signed status when exec finishes."),
+        ],
+    ):
+        """Subscribe one webhook for exec completion notification (success/failure)."""
+        return client.subscribe_exec_webhook(
+            session_token=session_token,
+            sandbox_id=sandbox_id,
+            exec_id=exec_id,
+            webhook_url=webhook_url,
+        )
+
+    @mcp.tool()
     def create_snapshot(
         session_token: Annotated[str, Field(description="Session token from create_session_token.")],
         sandbox_id: Annotated[str, Field(description="Target sandbox_id.")],

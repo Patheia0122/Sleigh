@@ -29,6 +29,7 @@ AI coding related actions included in `SleighToolInput.action`:
 - `create_session_token`
 - `run_workflow`
 - `read_sandbox`
+- `subscribe_exec_webhook`
 - `code_write`
 - `code_write_context_edit`
 - `code_write_replace_file`

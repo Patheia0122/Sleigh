@@ -184,6 +184,25 @@ class SleighClient:
             query={"session_token": session_token},
         )
 
+    def subscribe_exec_webhook(
+        self,
+        *,
+        session_token: str,
+        sandbox_id: str,
+        exec_id: str,
+        webhook_url: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/webhooks/exec/subscribe",
+            json_body={
+                "session_token": session_token,
+                "sandbox_id": sandbox_id,
+                "exec_id": exec_id,
+                "webhook_url": webhook_url,
+            },
+        )
+
     def list_mounts(self, *, session_token: str, sandbox_id: str) -> dict[str, Any]:
         return self._request(
             "GET",

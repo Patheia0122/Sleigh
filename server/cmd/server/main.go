@@ -61,6 +61,7 @@ func main() {
 		WarmPoolImage:              cfg.WarmPoolImage,
 		WarmPoolMemoryMB:           cfg.WarmPoolMemoryMB,
 		SnapshotRootDir:            cfg.SnapshotRootDir,
+		WebhookHMACSecret:          cfg.WebhookHMACSecret,
 		CursorTokenSecret:          cfg.CursorTokenSecret,
 		CursorTokenTTLSeconds:      cfg.CursorTokenTTLSeconds,
 		SandboxIdleTTLDays:         cfg.SandboxIdleTTLDays,

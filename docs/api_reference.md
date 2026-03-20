@@ -69,6 +69,7 @@ It covers all public endpoints currently registered by the server router.
 - `POST /sandboxes/{id}/exec`
 - `GET /sandboxes/{id}/exec/{execId}`
 - `POST /sandboxes/{id}/exec/{execId}/cancel`
+- `POST /webhooks/exec/subscribe`
 
 ### Memory
 
@@ -212,6 +213,25 @@ Fetches execution status/result for one exec task.
 ### 14) `POST /sandboxes/{id}/exec/{execId}/cancel`
 
 Cancels a running exec task.
+
+### 14.1) `POST /webhooks/exec/subscribe`
+
+Subscribes a webhook callback for one exec task. Server sends callback when the task reaches terminal state.
+
+Request body:
+- `session_token` (required)
+- `sandbox_id` (required)
+- `exec_id` (required)
+- `webhook_url` (required; `http://` or `https://`)
+
+Webhook delivery:
+- Method: `POST`
+- Headers: `Content-Type: application/json`, `X-Timestamp`, `X-Signature`
+- Signature: `X-Signature=sha256=<hex(hmac_sha256(WEBHOOK_HMAC_SECRET, "<timestamp>.<raw_body>"))>`
+- Body:
+  - `status`: `ok` (succeeded), `err` (failed/cancelled), `timeout` (delivery timeout/network timeout classification)
+  - `sandbox_id`
+  - `exec_id`
 
 ### 15) `GET /sessions/{sessionId}/exec-tasks`
 

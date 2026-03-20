@@ -58,6 +58,24 @@ Note: in SDK validation, every workflow step must include `sandbox_id`.
 
 ---
 
+## 3.1 Exec Completion Webhook Subscription
+
+Subscribe a callback for a specific exec task:
+
+```python
+sub = client.subscribe_exec_webhook(
+    session_token=session_token,
+    sandbox_id=sandbox_id,
+    exec_id="exec_xxx",
+    webhook_url="https://your-domain/webhook/notify/evt_xxx",
+)
+print(sub)
+```
+
+Server sends a signed POST when exec reaches terminal state.
+
+---
+
 ## 4. Sandbox Read API (AI Coding)
 
 ```python

@@ -152,6 +152,7 @@ Sleigh 服务端提供的API
 - `POST /sandboxes`：创建沙箱
 - `GET /sandboxes`：列出会话沙箱
 - `POST /sandboxes/{id}/exec`：执行命令
+- `POST /webhooks/exec/subscribe`：订阅执行任务结束后的 webhook 回调
 - `POST /workflow/run`：按序执行多步骤工作流
 - `POST /sandboxes/{id}/snapshots`：创建快照
 - `POST /sandboxes/{id}/rollback`：回滚快照
@@ -204,6 +205,7 @@ tool = client.as_langchain_tool()
 ## 说明与限制
 
 - code_write 的 `build_language` 可选；若服务端缺少对应镜像，会先拉取，导致耗时增加。
+- 执行任务 webhook 回调使用 `WEBHOOK_HMAC_SECRET` 进行 HMAC 签名（`X-Timestamp`、`X-Signature`）。
 - 挂载模式设计为只读（`ro`）。
 - 环境拷贝通过白名单根目录控制宿主机访问边界。
 

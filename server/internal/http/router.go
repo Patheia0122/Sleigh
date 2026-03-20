@@ -68,6 +68,13 @@ type execRequest struct {
 	WaitTimeoutSeconds int    `json:"wait_timeout_seconds,omitempty"`
 }
 
+type subscribeExecWebhookRequest struct {
+	SessionToken string `json:"session_token"`
+	SandboxID    string `json:"sandbox_id"`
+	ExecID       string `json:"exec_id"`
+	WebhookURL   string `json:"webhook_url"`
+}
+
 type expandMemoryRequest struct {
 	SessionToken string `json:"session_token"`
 	TargetMB     int64  `json:"target_mb"`
@@ -195,6 +202,7 @@ func NewHandler(cfg config.Config, service *sandbox.Service, monitorService *mon
 	mux.HandleFunc("POST /sandboxes/{id}/exec", router.execSandbox)
 	mux.HandleFunc("GET /sandboxes/{id}/exec/{execId}", router.getExecResult)
 	mux.HandleFunc("POST /sandboxes/{id}/exec/{execId}/cancel", router.cancelExec)
+	mux.HandleFunc("POST /webhooks/exec/subscribe", router.subscribeExecWebhook)
 	mux.HandleFunc("GET /sandboxes/{id}/memory/pressure", router.getMemoryPressure)
 	mux.HandleFunc("POST /sandboxes/{id}/memory/expand", router.expandMemory)
 	mux.HandleFunc("GET /sandboxes/{id}/mounts", router.listMounts)
@@ -1344,6 +1352,47 @@ func (r *Router) cancelExec(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 
 	result = clampExecResultOutput(result)
 	writeJSON(w, stdhttp.StatusOK, result)
+}
+
+func (r *Router) subscribeExecWebhook(w stdhttp.ResponseWriter, req *stdhttp.Request) {
+	var body subscribeExecWebhookRequest
+	if err := decodeJSON(req, &body); err != nil {
+		writeError(w, stdhttp.StatusBadRequest, err)
+		return
+	}
+	sessionID := strings.TrimSpace(body.SessionToken)
+	if sessionID == "" {
+		writeDomainError(w, appErr.ErrBadRequest)
+		return
+	}
+	sandboxID := strings.TrimSpace(body.SandboxID)
+	execID := strings.TrimSpace(body.ExecID)
+	webhookURL := strings.TrimSpace(body.WebhookURL)
+	if sandboxID == "" || execID == "" || webhookURL == "" {
+		writeError(w, stdhttp.StatusBadRequest, errors.New("sandbox_id, exec_id and webhook_url are required"))
+		return
+	}
+	created, execResult, deliveredImmediately, err := r.service.SubscribeExecWebhook(
+		req.Context(),
+		sessionID,
+		sandboxID,
+		execID,
+		webhookURL,
+	)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, stdhttp.StatusCreated, map[string]any{
+		"status":                "ok",
+		"created":               created,
+		"duplicate_ignored":     !created,
+		"delivered_immediately": deliveredImmediately,
+		"exec_status":           execResult.Status,
+		"sandbox_id":            sandboxID,
+		"exec_id":               execID,
+		"webhook_url":           webhookURL,
+	})
 }
 
 func (r *Router) getMemoryPressure(w stdhttp.ResponseWriter, req *stdhttp.Request) {

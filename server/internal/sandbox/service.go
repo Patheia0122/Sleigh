@@ -1,9 +1,16 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +55,7 @@ type Policy struct {
 	WarmPoolMemoryMB           int64
 	SnapshotRootDir            string
 	CursorTokenSecret          string
+	WebhookHMACSecret          string
 	CursorTokenTTLSeconds      int
 	SandboxIdleTTLDays         int
 }
@@ -113,6 +121,8 @@ type execTask struct {
 }
 
 const managedImageUnusedTTLDays = 14
+
+const webhookDeliveryTimeout = 8 * time.Second
 
 func NewService(
 	backend Backend,
@@ -924,6 +934,60 @@ func (s *Service) CancelExec(ctx context.Context, sandboxID, execID string) (Exe
 	return task.result, nil
 }
 
+func (s *Service) SubscribeExecWebhook(
+	ctx context.Context,
+	sessionID string,
+	sandboxID string,
+	execID string,
+	webhookURL string,
+) (bool, ExecResult, bool, error) {
+	if s.store == nil {
+		return false, ExecResult{}, false, fmt.Errorf("sandbox service not initialized")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	sandboxID = strings.TrimSpace(sandboxID)
+	execID = strings.TrimSpace(execID)
+	webhookURL = strings.TrimSpace(webhookURL)
+	if sessionID == "" || sandboxID == "" || execID == "" || webhookURL == "" {
+		return false, ExecResult{}, false, appErr.ErrBadRequest
+	}
+	parsedURL, err := neturl.ParseRequestURI(webhookURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		return false, ExecResult{}, false, appErr.ErrBadRequest
+	}
+	if err := s.AuthorizeSandboxAccess(ctx, sessionID, sandboxID); err != nil {
+		return false, ExecResult{}, false, err
+	}
+	execResult, err := s.GetExec(ctx, sandboxID, execID)
+	if err != nil {
+		return false, ExecResult{}, false, err
+	}
+	subscriptionID, err := id.New("whs_")
+	if err != nil {
+		return false, ExecResult{}, false, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	created, err := s.store.CreateExecWebhookSubscription(ctx, sqlitestore.ExecWebhookSubscriptionRecord{
+		ID:              subscriptionID,
+		SessionID:       sessionID,
+		SandboxID:       sandboxID,
+		ExecID:          execID,
+		WebhookURL:      webhookURL,
+		DeliveredStatus: "",
+		DeliveredAt:     "",
+		LastError:       "",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	})
+	if err != nil {
+		return false, ExecResult{}, false, err
+	}
+	if isExecTerminalStatus(execResult.Status) {
+		go s.deliverExecWebhookNotifications(context.Background(), sandboxID, execID, execResult)
+	}
+	return created, execResult, isExecTerminalStatus(execResult.Status), nil
+}
+
 func (s *Service) runExecTask(ctx context.Context, execID string) {
 	s.mu.RLock()
 	task, ok := s.execMap[execID]
@@ -1001,6 +1065,7 @@ func (s *Service) runExecTask(ctx context.Context, execID string) {
 		}
 		s.emitSessionAggregate(context.Background(), record.SessionID, current.result.SandboxID, "exec_finished", severity)
 	}
+	go s.deliverExecWebhookNotifications(context.Background(), current.result.SandboxID, current.result.ID, current.result)
 }
 
 func (s *Service) autoRecoverOOM(ctx context.Context, sandboxID string) string {
@@ -1033,6 +1098,85 @@ func isOOMFailure(output ExecOutput, err error) bool {
 	}
 	msg := strings.ToLower(err.Error() + " " + output.Stderr)
 	return strings.Contains(msg, "out of memory") || strings.Contains(msg, "cannot allocate memory")
+}
+
+func isExecTerminalStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "succeeded", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func execResultToWebhookStatus(result ExecResult) string {
+	switch strings.TrimSpace(result.Status) {
+	case "succeeded":
+		return "ok"
+	case "failed", "cancelled":
+		return "err"
+	default:
+		return "timeout"
+	}
+}
+
+func (s *Service) deliverExecWebhookNotifications(
+	ctx context.Context,
+	sandboxID string,
+	execID string,
+	result ExecResult,
+) {
+	if s.store == nil {
+		return
+	}
+	items, err := s.store.ListPendingExecWebhookSubscriptions(ctx, sandboxID, execID)
+	if err != nil || len(items) == 0 {
+		return
+	}
+	for _, sub := range items {
+		deliveryStatus, deliveryErr := s.sendExecWebhook(ctx, sub.WebhookURL, result)
+		lastErr := ""
+		if deliveryErr != nil {
+			lastErr = deliveryErr.Error()
+		}
+		_ = s.store.MarkExecWebhookSubscriptionDelivered(context.Background(), sub.ID, deliveryStatus, lastErr)
+	}
+}
+
+func (s *Service) sendExecWebhook(ctx context.Context, webhookURL string, result ExecResult) (string, error) {
+	bodyMap := map[string]any{
+		"status":     execResultToWebhookStatus(result),
+		"sandbox_id": result.SandboxID,
+		"exec_id":    result.ID,
+	}
+	bodyBytes, err := json.Marshal(bodyMap)
+	if err != nil {
+		return "err", fmt.Errorf("marshal webhook payload failed: %w", err)
+	}
+	timestamp := fmt.Sprintf("%d", time.Now().Unix())
+	signPayload := timestamp + "." + string(bodyBytes)
+	mac := hmac.New(sha256.New, []byte(strings.TrimSpace(s.policy.WebhookHMACSecret)))
+	_, _ = mac.Write([]byte(signPayload))
+	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	sendCtx, cancel := context.WithTimeout(ctx, webhookDeliveryTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(sendCtx, http.MethodPost, webhookURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "err", fmt.Errorf("build webhook request failed: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Timestamp", timestamp)
+	req.Header.Set("X-Signature", signature)
+	resp, err := (&http.Client{Timeout: webhookDeliveryTimeout}).Do(req)
+	if err != nil {
+		return "timeout", fmt.Errorf("send webhook failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "err", fmt.Errorf("webhook returned status %d", resp.StatusCode)
+	}
+	return execResultToWebhookStatus(result), nil
 }
 
 func sessionIDFromLabels(labels map[string]string) string {

@@ -26,6 +26,7 @@ DEFAULT_SANDBOX_IDLE_TTL_DAYS="14"
 DEFAULT_CURSOR_TOKEN_TTL_SECONDS="3600"
 DEFAULT_EXEC_CLEANUP_INTERVAL_SECONDS="3600"
 DEFAULT_SERVER_OTEL_EXPORTER_OTLP_ENDPOINT=""
+DEFAULT_WEBHOOK_HMAC_SECRET=""
 
 if [[ "${EUID}" -eq 0 ]]; then
   SUDO=""
@@ -81,6 +82,7 @@ msg() {
       ask_image_pull_timeout) echo "请输入镜像拉取超时时间（秒，IMAGE_PULL_TIMEOUT_SECONDS）:" ;;
       ask_idle_ttl_days) echo "请输入空闲沙箱自动清理天数（SANDBOX_IDLE_TTL_DAYS）:" ;;
       ask_cursor_secret) echo "请输入 CURSOR_TOKEN_SECRET（回车随机生成）:" ;;
+      ask_webhook_secret) echo "请输入 WEBHOOK_HMAC_SECRET（回车随机生成）:" ;;
       ask_otel_url) echo "请输入 OTEL gRPC endpoint（留空则关闭，例如 127.0.0.1:4317）:" ;;
       default_value) echo "默认值:" ;;
       default_dir) echo "默认目录:" ;;
@@ -106,6 +108,7 @@ msg() {
       environment) echo "环境区白名单根目录:" ;;
       addr) echo "监听地址:" ;;
       otel) echo "OTEL gRPC endpoint:" ;;
+      webhook_secret) echo "Webhook HMAC Secret:" ;;
       image_pull_timeout) echo "镜像拉取超时（秒）:" ;;
       idle_ttl_days) echo "空闲沙箱清理天数:" ;;
       status_hint) echo "可使用以下命令查看状态:" ;;
@@ -136,6 +139,7 @@ msg() {
       ask_image_pull_timeout) echo "Enter image pull timeout in seconds (IMAGE_PULL_TIMEOUT_SECONDS):" ;;
       ask_idle_ttl_days) echo "Enter idle sandbox cleanup TTL days (SANDBOX_IDLE_TTL_DAYS):" ;;
       ask_cursor_secret) echo "Enter CURSOR_TOKEN_SECRET (press Enter to auto-generate):" ;;
+      ask_webhook_secret) echo "Enter WEBHOOK_HMAC_SECRET (press Enter to auto-generate):" ;;
       ask_otel_url) echo "Enter OTEL gRPC endpoint (blank to disable, e.g. 127.0.0.1:4317):" ;;
       default_value) echo "Default value:" ;;
       default_dir) echo "Default directory:" ;;
@@ -161,6 +165,7 @@ msg() {
       environment) echo "environment-zone allowlist root:" ;;
       addr) echo "listen address:" ;;
       otel) echo "OTEL gRPC endpoint:" ;;
+      webhook_secret) echo "Webhook HMAC Secret:" ;;
       image_pull_timeout) echo "image pull timeout (seconds):" ;;
       idle_ttl_days) echo "idle sandbox cleanup TTL days:" ;;
       status_hint) echo "Check status with:" ;;
@@ -269,6 +274,7 @@ if [[ "${CONFIG_APPLY_MODE}" == "keep_restart" ]]; then
   IMAGE_PULL_TIMEOUT_SECONDS="$(sed -n 's/^IMAGE_PULL_TIMEOUT_SECONDS=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
   SANDBOX_IDLE_TTL_DAYS="$(sed -n 's/^SANDBOX_IDLE_TTL_DAYS=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
   CURSOR_TOKEN_SECRET="$(sed -n 's/^CURSOR_TOKEN_SECRET=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
+  WEBHOOK_HMAC_SECRET="$(sed -n 's/^WEBHOOK_HMAC_SECRET=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
   SERVER_OTEL_EXPORTER_OTLP_ENDPOINT="$(sed -n 's/^SERVER_OTEL_EXPORTER_OTLP_ENDPOINT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
   MOUNT_ROOT="$(sed -n 's/^SERVER_MOUNT_ALLOWED_ROOT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
   ENV_ROOT="$(sed -n 's/^SERVER_ENV_ALLOWED_ROOT=//p' "${ENV_FILE}" | sed -n '1p' | xargs)"
@@ -282,6 +288,7 @@ if [[ "${CONFIG_APPLY_MODE}" == "keep_restart" ]]; then
   [[ -n "${IMAGE_PULL_TIMEOUT_SECONDS}" ]] || IMAGE_PULL_TIMEOUT_SECONDS="${DEFAULT_IMAGE_PULL_TIMEOUT_SECONDS}"
   [[ -n "${SANDBOX_IDLE_TTL_DAYS}" ]] || SANDBOX_IDLE_TTL_DAYS="${DEFAULT_SANDBOX_IDLE_TTL_DAYS}"
   [[ -n "${CURSOR_TOKEN_SECRET}" ]] || CURSOR_TOKEN_SECRET="$(random_secret)"
+  [[ -n "${WEBHOOK_HMAC_SECRET}" ]] || WEBHOOK_HMAC_SECRET="${DEFAULT_WEBHOOK_HMAC_SECRET}"
   [[ -n "${MOUNT_ROOT}" ]] || MOUNT_ROOT="${DEFAULT_MOUNT_ROOT}"
   [[ -n "${ENV_ROOT}" ]] || ENV_ROOT="${DEFAULT_ENV_ROOT}"
 else
@@ -411,6 +418,13 @@ else
     CURSOR_TOKEN_SECRET="$(random_secret)"
   fi
 
+  echo "$(msg ask_webhook_secret)"
+  read -r USER_INPUT
+  WEBHOOK_HMAC_SECRET="$(trim "${USER_INPUT}")"
+  if [[ -z "${WEBHOOK_HMAC_SECRET}" ]]; then
+    WEBHOOK_HMAC_SECRET="$(random_secret)"
+  fi
+
   echo "$(msg default_value) ${DEFAULT_SERVER_OTEL_EXPORTER_OTLP_ENDPOINT:-<empty>}"
   echo "$(msg ask_otel_url)"
   read -r USER_INPUT
@@ -488,6 +502,7 @@ SNAPSHOT_ROOT_DIR=${BASE_DIR}/data/snapshots
 IMAGE_PULL_TIMEOUT_SECONDS=${IMAGE_PULL_TIMEOUT_SECONDS}
 SANDBOX_IDLE_TTL_DAYS=${SANDBOX_IDLE_TTL_DAYS}
 CURSOR_TOKEN_SECRET=${CURSOR_TOKEN_SECRET}
+WEBHOOK_HMAC_SECRET=${WEBHOOK_HMAC_SECRET}
 CURSOR_TOKEN_TTL_SECONDS=${DEFAULT_CURSOR_TOKEN_TTL_SECONDS}
 EXEC_CLEANUP_INTERVAL_SECONDS=${DEFAULT_EXEC_CLEANUP_INTERVAL_SECONDS}
 SERVER_MOUNT_ALLOWED_ROOT=${MOUNT_ROOT}
@@ -567,6 +582,7 @@ echo "- $(msg addr) ${SERVER_ADDR}"
 echo "- $(msg mount) ${MOUNT_ROOT}"
 echo "- $(msg environment) ${ENV_ROOT}"
 echo "- $(msg otel) ${SERVER_OTEL_EXPORTER_OTLP_ENDPOINT:-<disabled>}"
+echo "- $(msg webhook_secret) <configured>"
 echo "- $(msg image_pull_timeout) ${IMAGE_PULL_TIMEOUT_SECONDS}"
 echo "- $(msg idle_ttl_days) ${SANDBOX_IDLE_TTL_DAYS}"
 echo

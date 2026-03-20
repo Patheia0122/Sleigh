@@ -27,6 +27,7 @@ class SleighToolInput(BaseModel):
         "exec_command",
         "get_exec",
         "cancel_exec",
+        "subscribe_exec_webhook",
         "list_mounts",
         "list_mount_workspaces",
         "list_environment_workspaces",
@@ -51,6 +52,10 @@ class SleighToolInput(BaseModel):
     sandbox_id: str | None = Field(None, description="Sandbox identifier.")
     snapshot_id: str | None = Field(None, description="Snapshot identifier.")
     exec_id: str | None = Field(None, description="Execution identifier.")
+    webhook_url: str | None = Field(
+        None,
+        description="Webhook callback URL for exec completion notification.",
+    )
     mount_id: str | None = Field(None, description="Mount identifier.")
     command: str | None = Field(None, description="Command to execute in sandbox.")
     wait: bool | None = Field(None, description="Wait for exec result synchronously.")
@@ -185,6 +190,13 @@ class SleighToolInput(BaseModel):
             if self.action == "expand_memory":
                 if self.target_mb is None and not self.auto_expand:
                     raise ValueError("target_mb is required when action=expand_memory unless auto_expand=true")
+            if self.action == "subscribe_exec_webhook":
+                if self.sandbox_id is None or self.sandbox_id.strip() == "":
+                    raise ValueError("sandbox_id is required when action=subscribe_exec_webhook")
+                if self.exec_id is None or self.exec_id.strip() == "":
+                    raise ValueError("exec_id is required when action=subscribe_exec_webhook")
+                if self.webhook_url is None or self.webhook_url.strip() == "":
+                    raise ValueError("webhook_url is required when action=subscribe_exec_webhook")
             return self
         mode = (self.write_mode or "context_edit").strip()
         if self.action == "code_write_context_edit":
@@ -272,6 +284,13 @@ class SleighLangChainClient:
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),
                 exec_id=_require(data.exec_id, "exec_id"),
+            )
+        if action == "subscribe_exec_webhook":
+            return self.client.subscribe_exec_webhook(
+                session_token=token,
+                sandbox_id=_require(data.sandbox_id, "sandbox_id"),
+                exec_id=_require(data.exec_id, "exec_id"),
+                webhook_url=_require(data.webhook_url, "webhook_url"),
             )
         if action == "list_mounts":
             return self.client.list_mounts(session_token=token, sandbox_id=_require(data.sandbox_id, "sandbox_id"))
@@ -377,6 +396,7 @@ class SleighLangChainClient:
                 "Sleigh runtime unified tool. "
                 "Use action to call sandbox create/exec/snapshot/mount/memory/history APIs. "
                 "First call action=create_session_token, then pass session_token to other actions. "
+                "Use action=subscribe_exec_webhook to receive signed webhook after exec completion. "
                 "Use action=list_mount_workspaces before mount_path, and action=list_environment_workspaces before copy_environment. "
                 "For run_workflow, every step must include sandbox_id. "
                 "For code_write, default mode is context_edit; "

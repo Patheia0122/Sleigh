@@ -152,6 +152,7 @@ Core control-plane endpoints exposed by the Sleigh server.
 - `POST /sandboxes`: create sandbox
 - `GET /sandboxes`: list session sandboxes
 - `POST /sandboxes/{id}/exec`: execute command
+- `POST /webhooks/exec/subscribe`: subscribe exec completion webhook callback
 - `POST /workflow/run`: ordered multi-step workflow execution
 - `POST /sandboxes/{id}/snapshots`: create snapshot
 - `POST /sandboxes/{id}/rollback`: rollback snapshot
@@ -202,6 +203,7 @@ More complete Agent-friendly example:
 ## Notes and Limits
 
 - `build_language` in code_write is optional; if the server lacks the required image, it will pull first and increase latency.
+- Exec webhook callbacks are HMAC signed (`X-Timestamp`, `X-Signature`) with server-side `WEBHOOK_HMAC_SECRET`.
 - Mount mode is read-only (`ro`) by design.
 - Environment copy is guarded by allowlisted root boundaries.
 - Requires Linux host

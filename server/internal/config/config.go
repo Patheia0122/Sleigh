@@ -28,6 +28,7 @@ const (
 	defaultMountAllowedRoot           = "/opt/sleigh-runtime/mount-root-default"
 	defaultEnvironmentAllowedRoot     = "/opt/sleigh-runtime/environment-root-default"
 	defaultOTELEndpoint               = ""
+	defaultWebhookHMACSecret          = "dev-webhook-secret"
 )
 
 type Config struct {
@@ -48,6 +49,7 @@ type Config struct {
 	ImagePullTimeoutSeconds    int
 	SandboxIdleTTLDays         int
 	OTELEndpoint               string
+	WebhookHMACSecret          string
 	CursorTokenSecret          string
 	CursorTokenTTLSeconds      int
 	ExecCleanupIntervalSeconds int
@@ -74,6 +76,7 @@ func FromEnv() Config {
 		ImagePullTimeoutSeconds:    getEnvInt("IMAGE_PULL_TIMEOUT_SECONDS", defaultImagePullTimeoutSeconds),
 		SandboxIdleTTLDays:         getEnvInt("SANDBOX_IDLE_TTL_DAYS", defaultSandboxIdleTTLDays),
 		OTELEndpoint:               getEnv("SERVER_OTEL_EXPORTER_OTLP_ENDPOINT", defaultOTELEndpoint),
+		WebhookHMACSecret:          getEnv("WEBHOOK_HMAC_SECRET", defaultWebhookHMACSecret),
 		CursorTokenSecret:          getEnv("CURSOR_TOKEN_SECRET", "dev-cursor-secret"),
 		CursorTokenTTLSeconds:      getEnvInt("CURSOR_TOKEN_TTL_SECONDS", defaultCursorTokenTTL),
 		ExecCleanupIntervalSeconds: getEnvInt("EXEC_CLEANUP_INTERVAL_SECONDS", defaultExecCleanupIntervalSeconds),

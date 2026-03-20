@@ -70,6 +70,19 @@ type ExecTaskRecord struct {
 	CompletedAt string
 }
 
+type ExecWebhookSubscriptionRecord struct {
+	ID              string
+	SessionID       string
+	SandboxID       string
+	ExecID          string
+	WebhookURL      string
+	DeliveredStatus string
+	DeliveredAt     string
+	LastError       string
+	CreatedAt       string
+	UpdatedAt       string
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -786,6 +799,105 @@ LIMIT 1
 	return record, nil
 }
 
+func (s *Store) CreateExecWebhookSubscription(
+	ctx context.Context,
+	record ExecWebhookSubscriptionRecord,
+) (bool, error) {
+	const query = `
+INSERT OR IGNORE INTO exec_webhook_subscriptions (
+  id, session_id, sandbox_id, exec_id, webhook_url, delivered_status, delivered_at, last_error, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+	result, err := s.db.ExecContext(
+		ctx,
+		query,
+		record.ID,
+		record.SessionID,
+		record.SandboxID,
+		record.ExecID,
+		record.WebhookURL,
+		record.DeliveredStatus,
+		record.DeliveredAt,
+		record.LastError,
+		record.CreatedAt,
+		record.UpdatedAt,
+	)
+	if err != nil {
+		return false, fmt.Errorf("insert exec webhook subscription: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("subscription rows affected: %w", err)
+	}
+	return rows > 0, nil
+}
+
+func (s *Store) ListPendingExecWebhookSubscriptions(
+	ctx context.Context,
+	sandboxID string,
+	execID string,
+) ([]ExecWebhookSubscriptionRecord, error) {
+	const query = `
+SELECT id, session_id, sandbox_id, exec_id, webhook_url, delivered_status, delivered_at, last_error, created_at, updated_at
+FROM exec_webhook_subscriptions
+WHERE sandbox_id = ? AND exec_id = ? AND delivered_at = ''
+ORDER BY created_at ASC
+`
+	rows, err := s.db.QueryContext(ctx, query, sandboxID, execID)
+	if err != nil {
+		return nil, fmt.Errorf("query pending exec webhook subscriptions: %w", err)
+	}
+	defer rows.Close()
+	items := make([]ExecWebhookSubscriptionRecord, 0)
+	for rows.Next() {
+		var rec ExecWebhookSubscriptionRecord
+		if err := rows.Scan(
+			&rec.ID,
+			&rec.SessionID,
+			&rec.SandboxID,
+			&rec.ExecID,
+			&rec.WebhookURL,
+			&rec.DeliveredStatus,
+			&rec.DeliveredAt,
+			&rec.LastError,
+			&rec.CreatedAt,
+			&rec.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan pending exec webhook subscription: %w", err)
+		}
+		items = append(items, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending exec webhook subscriptions: %w", err)
+	}
+	return items, nil
+}
+
+func (s *Store) MarkExecWebhookSubscriptionDelivered(
+	ctx context.Context,
+	subscriptionID string,
+	status string,
+	lastError string,
+) error {
+	const query = `
+UPDATE exec_webhook_subscriptions
+SET delivered_status = ?, delivered_at = ?, last_error = ?, updated_at = ?
+WHERE id = ?
+`
+	result, err := s.db.ExecContext(ctx, query, status, now(), lastError, now(), subscriptionID)
+	if err != nil {
+		return fmt.Errorf("update exec webhook subscription delivered state: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("subscription update rows affected: %w", err)
+	}
+	if rows == 0 {
+		return appErr.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) NextSessionSequence(ctx context.Context, sessionID string) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1083,11 +1195,30 @@ CREATE TABLE IF NOT EXISTS managed_images (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS exec_webhook_subscriptions (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  sandbox_id TEXT NOT NULL,
+  exec_id TEXT NOT NULL,
+  webhook_url TEXT NOT NULL,
+  delivered_status TEXT NOT NULL DEFAULT '',
+  delivered_at TEXT NOT NULL DEFAULT '',
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(exec_id, webhook_url),
+  FOREIGN KEY(sandbox_id) REFERENCES sandboxes(id) ON DELETE CASCADE,
+  FOREIGN KEY(exec_id) REFERENCES exec_tasks(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_sandboxes_session_id_id
 ON sandboxes(session_id, id);
 
 CREATE INDEX IF NOT EXISTS idx_exec_tasks_sandbox_started_id
 ON exec_tasks(sandbox_id, started_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_exec_webhook_subscriptions_sandbox_exec
+ON exec_webhook_subscriptions(sandbox_id, exec_id, delivered_at);
 `
 
 	if _, err := db.ExecContext(ctx, schema); err != nil {
