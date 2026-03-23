@@ -941,31 +941,57 @@ func (s *Service) SubscribeExecWebhook(
 	execID string,
 	webhookURL string,
 ) (bool, ExecResult, bool, error) {
+	ctx, span := s.tracer.Start(ctx, "webhook.subscribe.exec")
+	defer span.End()
 	if s.store == nil {
-		return false, ExecResult{}, false, fmt.Errorf("sandbox service not initialized")
+		err := fmt.Errorf("sandbox service not initialized")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return false, ExecResult{}, false, err
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	sandboxID = strings.TrimSpace(sandboxID)
 	execID = strings.TrimSpace(execID)
 	webhookURL = strings.TrimSpace(webhookURL)
+	span.SetAttributes(
+		attribute.String("webhook.session_id", sessionID),
+		attribute.String("webhook.sandbox_id", sandboxID),
+		attribute.String("webhook.exec_id", execID),
+		attribute.String("webhook.url", webhookURL),
+	)
 	if sessionID == "" || sandboxID == "" || execID == "" || webhookURL == "" {
+		span.RecordError(appErr.ErrBadRequest)
+		span.SetStatus(codes.Error, appErr.ErrBadRequest.Error())
 		return false, ExecResult{}, false, appErr.ErrBadRequest
 	}
 	parsedURL, err := neturl.ParseRequestURI(webhookURL)
 	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		span.RecordError(appErr.ErrBadRequest)
+		span.SetStatus(codes.Error, appErr.ErrBadRequest.Error())
 		return false, ExecResult{}, false, appErr.ErrBadRequest
 	}
+	span.SetAttributes(
+		attribute.String("webhook.scheme", parsedURL.Scheme),
+		attribute.String("webhook.host", parsedURL.Host),
+	)
 	if err := s.AuthorizeSandboxAccess(ctx, sessionID, sandboxID); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return false, ExecResult{}, false, err
 	}
 	execResult, err := s.GetExec(ctx, sandboxID, execID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return false, ExecResult{}, false, err
 	}
 	subscriptionID, err := id.New("whs_")
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return false, ExecResult{}, false, err
 	}
+	span.SetAttributes(attribute.String("webhook.subscription_id", subscriptionID))
 	now := time.Now().UTC().Format(time.RFC3339)
 	created, err := s.store.CreateExecWebhookSubscription(ctx, sqlitestore.ExecWebhookSubscriptionRecord{
 		ID:              subscriptionID,
@@ -980,12 +1006,21 @@ func (s *Service) SubscribeExecWebhook(
 		UpdatedAt:       now,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return false, ExecResult{}, false, err
 	}
-	if isExecTerminalStatus(execResult.Status) {
+	isTerminal := isExecTerminalStatus(execResult.Status)
+	span.SetAttributes(
+		attribute.Bool("webhook.subscription_created", created),
+		attribute.String("webhook.exec_status", execResult.Status),
+		attribute.Bool("webhook.deliver_immediately", isTerminal),
+	)
+	span.SetStatus(codes.Ok, "exec webhook subscribed")
+	if isTerminal {
 		go s.deliverExecWebhookNotifications(context.Background(), sandboxID, execID, execResult)
 	}
-	return created, execResult, isExecTerminalStatus(execResult.Status), nil
+	return created, execResult, isTerminal, nil
 }
 
 func (s *Service) runExecTask(ctx context.Context, execID string) {
@@ -1144,13 +1179,38 @@ func (s *Service) deliverExecWebhookNotifications(
 }
 
 func (s *Service) sendExecWebhook(ctx context.Context, webhookURL string, result ExecResult) (string, error) {
-	bodyMap := map[string]any{
-		"status":     execResultToWebhookStatus(result),
-		"sandbox_id": result.SandboxID,
-		"exec_id":    result.ID,
+	ctx, span := s.tracer.Start(ctx, "webhook.delivery.exec")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("webhook.url", strings.TrimSpace(webhookURL)),
+		attribute.String("webhook.sandbox_id", result.SandboxID),
+		attribute.String("webhook.exec_id", result.ID),
+		attribute.String("webhook.exec_status", result.Status),
+	)
+	mapped := execResultToWebhookStatus(result)
+	payload := map[string]any{
+		"exec_id":      result.ID,
+		"sandbox_id":   result.SandboxID,
+		"exec_status":  result.Status,
+		"command":      result.Command,
+		"started_at":   result.StartedAt,
+		"completed_at": result.CompletedAt,
 	}
+	if result.ExitCode != nil {
+		payload["exit_code"] = *result.ExitCode
+	}
+	if strings.TrimSpace(result.Error) != "" {
+		payload["error"] = result.Error
+	}
+	bodyMap := map[string]any{
+		"status":  mapped,
+		"payload": payload,
+	}
+	span.SetAttributes(attribute.String("webhook.delivery_status", mapped))
 	bodyBytes, err := json.Marshal(bodyMap)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "err", fmt.Errorf("marshal webhook payload failed: %w", err)
 	}
 	timestamp := fmt.Sprintf("%d", time.Now().Unix())
@@ -1163,6 +1223,8 @@ func (s *Service) sendExecWebhook(ctx context.Context, webhookURL string, result
 	defer cancel()
 	req, err := http.NewRequestWithContext(sendCtx, http.MethodPost, webhookURL, bytes.NewReader(bodyBytes))
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "err", fmt.Errorf("build webhook request failed: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -1170,13 +1232,22 @@ func (s *Service) sendExecWebhook(ctx context.Context, webhookURL string, result
 	req.Header.Set("X-Signature", signature)
 	resp, err := (&http.Client{Timeout: webhookDeliveryTimeout}).Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "timeout", fmt.Errorf("send webhook failed: %w", err)
 	}
 	defer resp.Body.Close()
+	span.SetAttributes(attribute.Int("webhook.http_status_code", resp.StatusCode))
 	if resp.StatusCode >= 300 {
-		return "err", fmt.Errorf("webhook returned status %d", resp.StatusCode)
+		err := fmt.Errorf("webhook returned status %d", resp.StatusCode)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return "err", err
 	}
-	return execResultToWebhookStatus(result), nil
+	finalStatus := execResultToWebhookStatus(result)
+	span.SetAttributes(attribute.String("webhook.delivery_result", finalStatus))
+	span.SetStatus(codes.Ok, "webhook delivered")
+	return finalStatus, nil
 }
 
 func sessionIDFromLabels(labels map[string]string) string {

@@ -205,7 +205,7 @@ tool = client.as_langchain_tool()
 ## 说明与限制
 
 - code_write 的 `build_language` 可选；若服务端缺少对应镜像，会先拉取，导致耗时增加。
-- 执行任务 webhook 回调使用 `WEBHOOK_HMAC_SECRET` 进行 HMAC 签名（`X-Timestamp`、`X-Signature`）。
+- 执行任务 webhook 回调使用 `WEBHOOK_HMAC_SECRET` 进行 HMAC 签名（`X-Timestamp`、`X-Signature`）。请求体为 `{"status":"ok|err|timeout","payload":{...}}`，其中 `payload` 含 `exec_id`、`sandbox_id`、`exec_status`、`command`、时间戳，以及可选的 `exit_code`、`error`。
 - 可在 `POST /sandboxes/{id}/exec` 请求体里直接传 `webhook_url` 一步完成订阅（无需先拿 `exec_id` 再调订阅接口），也可在 `exec` 返回后用 `POST /webhooks/exec/subscribe`。
 - 挂载模式设计为只读（`ro`）。
 - 环境拷贝通过白名单根目录控制宿主机访问边界。
