@@ -124,6 +124,30 @@ const managedImageUnusedTTLDays = 14
 
 const webhookDeliveryTimeout = 8 * time.Second
 
+// Webhook JSON payload limits (UTF-8 runes); keep tail so the end of long errors/commands is visible.
+const (
+	maxWebhookCommandRunes = 2048
+	maxWebhookErrorRunes   = 4096
+)
+
+func truncateWebhookTailRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 || s == "" {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	omitted := len(runes) - maxRunes
+	tail := string(runes[omitted:])
+	return fmt.Sprintf(
+		"...(truncated webhook field: omitted %d runes, showing last %d)\n%s",
+		omitted,
+		maxRunes,
+		tail,
+	)
+}
+
 func NewService(
 	backend Backend,
 	store *sqlitestore.Store,
@@ -1192,7 +1216,7 @@ func (s *Service) sendExecWebhook(ctx context.Context, webhookURL string, result
 		"exec_id":      result.ID,
 		"sandbox_id":   result.SandboxID,
 		"exec_status":  result.Status,
-		"command":      result.Command,
+		"command":      truncateWebhookTailRunes(result.Command, maxWebhookCommandRunes),
 		"started_at":   result.StartedAt,
 		"completed_at": result.CompletedAt,
 	}
@@ -1200,7 +1224,7 @@ func (s *Service) sendExecWebhook(ctx context.Context, webhookURL string, result
 		payload["exit_code"] = *result.ExitCode
 	}
 	if strings.TrimSpace(result.Error) != "" {
-		payload["error"] = result.Error
+		payload["error"] = truncateWebhookTailRunes(result.Error, maxWebhookErrorRunes)
 	}
 	bodyMap := map[string]any{
 		"status":  mapped,

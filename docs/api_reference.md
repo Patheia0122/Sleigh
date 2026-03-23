@@ -236,7 +236,7 @@ Webhook delivery:
 - Signature: `X-Signature=sha256=<hex(hmac_sha256(WEBHOOK_HMAC_SECRET, "<timestamp>.<raw_body>"))>`
 - Body (JSON):
   - `status`: `ok` (exec succeeded), `err` (exec failed/cancelled), or `timeout` (HTTP delivery to your URL timed out / network error)
-  - `payload` (object): always includes at least `exec_id`, `sandbox_id`, `exec_status` (raw task status: `succeeded` / `failed` / `cancelled`), `command`, `started_at`, `completed_at`; includes `exit_code` and `error` when present
+  - `payload` (object): always includes at least `exec_id`, `sandbox_id`, `exec_status` (raw task status: `succeeded` / `failed` / `cancelled`), `command`, `started_at`, `completed_at`; includes `exit_code` and `error` when present. `command` and `error` are truncated by UTF-8 rune count when very long (tail preserved, with a `...(truncated webhook field: ...)` prefix).
 
 ### 15) `GET /sessions/{sessionId}/exec-tasks`
 

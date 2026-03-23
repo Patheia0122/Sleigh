@@ -203,7 +203,7 @@ More complete Agent-friendly example:
 ## Notes and Limits
 
 - `build_language` in code_write is optional; if the server lacks the required image, it will pull first and increase latency.
-- Exec webhook callbacks are HMAC signed (`X-Timestamp`, `X-Signature`) with server-side `WEBHOOK_HMAC_SECRET`. JSON body is `{"status":"ok|err|timeout","payload":{...}}` where `payload` includes `exec_id`, `sandbox_id`, `exec_status`, `command`, timestamps, and optional `exit_code` / `error`.
+- Exec webhook callbacks are HMAC signed (`X-Timestamp`, `X-Signature`) with server-side `WEBHOOK_HMAC_SECRET`. JSON body is `{"status":"ok|err|timeout","payload":{...}}` where `payload` includes `exec_id`, `sandbox_id`, `exec_status`, `command`, timestamps, and optional `exit_code` / `error`. Long `command` / `error` strings are truncated (tail kept).
 - You can pass `webhook_url` on `POST /sandboxes/{id}/exec` to subscribe in one shot (no separate `exec_id` round-trip), or use `POST /webhooks/exec/subscribe` after `exec` returns.
 - Mount mode is read-only (`ro`) by design.
 - Environment copy is guarded by allowlisted root boundaries.
