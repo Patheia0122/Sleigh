@@ -152,6 +152,7 @@ class SleighClient:
         command: str,
         wait: bool | None = None,
         wait_timeout_seconds: int | None = None,
+        webhook_url: str | None = None,
         request_timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"session_token": session_token, "command": command}
@@ -159,6 +160,8 @@ class SleighClient:
             body["wait"] = wait
         if wait_timeout_seconds is not None:
             body["wait_timeout_seconds"] = wait_timeout_seconds
+        if webhook_url is not None and str(webhook_url).strip() != "":
+            body["webhook_url"] = webhook_url
         return self._request(
             "POST",
             f"/sandboxes/{sandbox_id}/exec",

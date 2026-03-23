@@ -66,6 +66,22 @@ type execRequest struct {
 	Command            string `json:"command"`
 	Wait               bool   `json:"wait,omitempty"`
 	WaitTimeoutSeconds int    `json:"wait_timeout_seconds,omitempty"`
+	// WebhookURL optional: subscribe to completion callback for this exec in the same request
+	// (avoids a second round-trip; same semantics as POST /webhooks/exec/subscribe).
+	WebhookURL string `json:"webhook_url,omitempty"`
+}
+
+type execWebhookSubSummary struct {
+	Created              bool   `json:"created,omitempty"`
+	DuplicateIgnored     bool   `json:"duplicate_ignored,omitempty"`
+	DeliveredImmediately bool   `json:"delivered_immediately,omitempty"`
+	ExecStatus           string `json:"exec_status,omitempty"`
+	Error                string `json:"error,omitempty"`
+}
+
+type execWithWebhookResponse struct {
+	sandbox.ExecResult
+	WebhookSubscription *execWebhookSubSummary `json:"webhook_subscription,omitempty"`
 }
 
 type subscribeExecWebhookRequest struct {
@@ -165,6 +181,7 @@ type workflowStepRequest struct {
 	Wait               *bool             `json:"wait,omitempty"`
 	WaitTimeoutSeconds int               `json:"wait_timeout_seconds,omitempty"`
 	SnapshotID         string            `json:"snapshot_id,omitempty"`
+	WebhookURL         string            `json:"webhook_url,omitempty"`
 }
 
 type workflowStepResult struct {
@@ -610,8 +627,29 @@ func (r *Router) execSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		return
 	}
 	result = clampExecResultOutput(result)
+
+	var wh *execWebhookSubSummary
+	if u := strings.TrimSpace(body.WebhookURL); u != "" {
+		created, execRes, deliveredNow, subErr := r.service.SubscribeExecWebhook(
+			req.Context(), sessionID, sandboxID, result.ID, u,
+		)
+		if subErr != nil {
+			wh = &execWebhookSubSummary{Error: subErr.Error()}
+		} else {
+			wh = &execWebhookSubSummary{
+				Created:              created,
+				DuplicateIgnored:     !created,
+				DeliveredImmediately: deliveredNow,
+				ExecStatus:           execRes.Status,
+			}
+		}
+	}
+
 	if !body.Wait {
-		writeJSON(w, stdhttp.StatusAccepted, result)
+		writeJSON(w, stdhttp.StatusAccepted, execWithWebhookResponse{
+			ExecResult:          result,
+			WebhookSubscription: wh,
+		})
 		return
 	}
 
@@ -632,7 +670,10 @@ func (r *Router) execSandbox(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		)
 	}
 	current = clampExecResultOutput(current)
-	writeJSON(w, stdhttp.StatusOK, current)
+	writeJSON(w, stdhttp.StatusOK, execWithWebhookResponse{
+		ExecResult:          current,
+		WebhookSubscription: wh,
+	})
 }
 
 func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
@@ -710,6 +751,14 @@ func (r *Router) runWorkflow(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			if err != nil {
 				markFailed(err)
 				break
+			}
+			if wu := strings.TrimSpace(step.WebhookURL); wu != "" {
+				if _, _, _, subErr := r.service.SubscribeExecWebhook(
+					req.Context(), sessionID, sandboxID, execResult.ID, wu,
+				); subErr != nil {
+					markFailed(subErr)
+					break
+				}
 			}
 			wait := true
 			if step.Wait != nil {

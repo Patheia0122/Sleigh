@@ -54,7 +54,10 @@ class SleighToolInput(BaseModel):
     exec_id: str | None = Field(None, description="Execution identifier.")
     webhook_url: str | None = Field(
         None,
-        description="Webhook callback URL for exec completion notification.",
+        description=(
+            "Optional webhook URL. For exec_command: server auto-subscribes for this exec (same as subscribe_exec_webhook). "
+            "Or call subscribe_exec_webhook with exec_id from the exec response."
+        ),
     )
     mount_id: str | None = Field(None, description="Mount identifier.")
     command: str | None = Field(None, description="Command to execute in sandbox.")
@@ -107,7 +110,7 @@ class SleighToolInput(BaseModel):
         description=(
             "Ordered workflow steps for run_workflow. Each step must include sandbox_id and action. "
             "Supported action: create_sandbox/exec_command/create_snapshot/rollback_snapshot/delete_sandbox. "
-            "Common fields: sandbox_id, image, labels, memory_limit_mb, command, wait, wait_timeout_seconds, snapshot_id."
+            "Common fields: sandbox_id, image, labels, memory_limit_mb, command, wait, wait_timeout_seconds, snapshot_id, webhook_url (exec_command only)."
         ),
     )
     read_command: str | None = Field(None, description="Whitelisted sandbox read command.")
@@ -271,6 +274,7 @@ class SleighLangChainClient:
                 command=_require(data.command, "command"),
                 wait=data.wait,
                 wait_timeout_seconds=data.wait_timeout_seconds,
+                webhook_url=data.webhook_url,
                 request_timeout_seconds=request_timeout_seconds,
             )
         if action == "get_exec":

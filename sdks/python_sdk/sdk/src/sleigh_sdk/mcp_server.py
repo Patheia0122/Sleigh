@@ -87,6 +87,15 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             int | None,
             Field(description="Wait timeout seconds when wait=true. Default is 10."),
         ] = None,
+        webhook_url: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional: subscribe this URL for exec completion in the same request "
+                    "(no separate subscribe_exec_webhook call)."
+                )
+            ),
+        ] = None,
         request_timeout_seconds: Annotated[
             float | None,
             Field(description="Optional HTTP timeout override for exec_command."),
@@ -99,6 +108,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             command=command,
             wait=wait,
             wait_timeout_seconds=wait_timeout_seconds,
+            webhook_url=webhook_url,
             request_timeout_seconds=request_timeout_seconds,
         )
 
@@ -251,7 +261,8 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             Field(
                 description=(
                     "Ordered workflow steps. Each step must include sandbox_id and action. "
-                    "Supported action: create_sandbox, exec_command, create_snapshot, rollback_snapshot, delete_sandbox."
+                    "Supported action: create_sandbox, exec_command, create_snapshot, rollback_snapshot, delete_sandbox. "
+                    "exec_command steps may include webhook_url to subscribe for completion in one step."
                 )
             ),
         ],

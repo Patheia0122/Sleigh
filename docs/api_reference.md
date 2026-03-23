@@ -201,10 +201,14 @@ Request body:
 - `command` (required)
 - `wait` (optional bool)
 - `wait_timeout_seconds` (optional int)
+- `webhook_url` (optional string, `http://` or `https://`): subscribe for completion callback **for this exec** in the same request (same semantics as `POST /webhooks/exec/subscribe`). Subscription is created immediately after the task is queued, **before** `wait` polling, so long-running commands still receive a callback when they finish.
 
 Behavior:
 - If `wait=true`, endpoint can poll and return terminal result inline (or timeout envelope).
 - Otherwise returns async execution metadata (`exec_id` etc).
+
+Response may include:
+- `webhook_subscription`: `{ "created", "duplicate_ignored", "delivered_immediately", "exec_status" }` or `{ "error": "..." }` if subscription failed (the exec task still runs).
 
 ### 13) `GET /sandboxes/{id}/exec/{execId}`
 
@@ -217,6 +221,8 @@ Cancels a running exec task.
 ### 14.1) `POST /webhooks/exec/subscribe`
 
 Subscribes a webhook callback for one exec task. Server sends callback when the task reaches terminal state.
+
+Prefer passing `webhook_url` on `POST /sandboxes/{id}/exec` when you already know the URL, so the Agent does not need a second call with `exec_id`.
 
 Request body:
 - `session_token` (required)
@@ -384,7 +390,7 @@ Each step supports:
 - `sandbox_id` (required for non-create actions)
 - optional fields per action:
   - `image`, `labels`, `memory_limit_mb`
-  - `command`, `wait`, `wait_timeout_seconds`
+  - `command`, `wait`, `wait_timeout_seconds`, `webhook_url` (for `exec_command` only; same as exec endpoint)
   - `snapshot_id`
 
 Supported actions:
