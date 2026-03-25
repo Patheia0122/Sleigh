@@ -1,3 +1,6 @@
+# Local ASCII architecture sketch (not versioned)
+docs/sleigh_architecture_ascii.txt
+
 # Development process documents (archived)
 docs/dev-process/
 
@@ -7,6 +10,9 @@ sdks/python_sdk/examples/
 # Go cache / module cache
 server/.gopath/
 **/.gocache/
+
+# Local Python SDK virtualenv
+sdks/python_sdk/sdk/.venv/
 
 # Python bytecode and caches
 **/__pycache__/

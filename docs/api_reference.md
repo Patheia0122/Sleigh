@@ -275,17 +275,21 @@ Behavior:
 
 Lists directories available under mount allowlist root.
 
-Response:
-- `allowed_root`
-- `items`
+Response (representative):
+- `allowed_root`, `items`, `entries`, `truncated`, `omitted_count`
+- `zone_kind`: `mount_read_only`
+- `agent_guidance`: object with `correct_next_operation` (`mount_path`), `correct_next_summary`, `wrong_next_operation` (`copy_environment`), `wrong_next_warning` — explicitly states **not** to use `copy_environment` for these paths (that API is for the environment zone list only).
+- `suggested_next_actions`: includes `action`, `description`, `required_fields`, `parameter_semantics` (clarifies `workspace_path` vs `environment_path`).
 
 ### 20) `GET /environments/workspaces`
 
 Lists directories available under environment allowlist root.
 
-Response:
-- `allowed_root`
-- `items`
+Response (representative):
+- `allowed_root`, `items`, `entries`, `truncated`, `omitted_count`
+- `zone_kind`: `environment_copy`
+- `agent_guidance`: object with `correct_next_operation` (`copy_environment`), `correct_next_summary`, `wrong_next_operation` (`mount_path`), `wrong_next_warning` — explicitly states **not** to use `mount_path` for these paths (mount list is separate).
+- `suggested_next_actions`: includes `action`, `description`, `required_fields`, `parameter_semantics` (clarifies `environment_path` vs `workspace_path`).
 
 ### 21) `GET /sandboxes/{id}/mounts`
 
@@ -305,6 +309,7 @@ Request body:
 
 Notes:
 - Server enforces read-only mode (`ro`) regardless of client preference.
+- The resolved **host** directory must **already exist** (and be a directory). If it is missing, returns `404` — the server does **not** create host paths (avoids Docker bind-mount silently creating an empty directory).
 
 ### 23) `DELETE /sandboxes/{id}/mounts/{mountId}`
 
@@ -323,8 +328,8 @@ Request body:
 - `sandbox_path` (required absolute path inside sandbox)
 
 Behavior:
-- Validates source directory under `SERVER_ENV_ALLOWED_ROOT`.
-- Ensures sandbox is running and destination path exists (creates as needed).
+- Validates source directory under `SERVER_ENV_ALLOWED_ROOT`. The **host** source path must **already exist** as a directory; if missing, returns `404` — the server does **not** create missing host directories.
+- Ensures sandbox is running and **sandbox-side** destination path exists (may create directories inside the container as needed).
 - Performs copy via controlled host-to-container flow.
 
 ### 25) `POST /sandboxes/{id}/ops/read`

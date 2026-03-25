@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -43,21 +44,27 @@ type Service struct {
 }
 
 type Policy struct {
-	MinExpandMB                int64
-	MaxExpandMB                int64
-	MaxExpandStepMB            int64
-	ExecTTLDays                int
-	ExecCleanupIntervalSeconds int
-	MountAllowedRoot           string
-	EnvironmentAllowedRoot     string
-	WarmPoolSize               int
-	WarmPoolImage              string
-	WarmPoolMemoryMB           int64
-	SnapshotRootDir            string
-	CursorTokenSecret          string
-	WebhookHMACSecret          string
-	CursorTokenTTLSeconds      int
-	SandboxIdleTTLDays         int
+	MinExpandMB int64
+	// MaxExpandMB when > 0 caps auto/manual expand targets (MB). When <= 0, no per-sandbox
+	// absolute ceiling in software; host ratio checks (HTTP) and Docker still apply.
+	MaxExpandMB     int64
+	MaxExpandStepMB int64
+	// ExecMemoryPollIntervalSeconds while >0, polls cgroup memory during a running exec
+	// (same conditions as pre-exec auto-expand: auto_expand_memory label + near limit).
+	// Set 0 to disable. Default from env MEMORY_EXPAND_EXEC_POLL_SECONDS.
+	ExecMemoryPollIntervalSeconds int
+	ExecTTLDays                   int
+	ExecCleanupIntervalSeconds    int
+	MountAllowedRoot              string
+	EnvironmentAllowedRoot        string
+	WarmPoolSize                  int
+	WarmPoolImage                 string
+	WarmPoolMemoryMB              int64
+	SnapshotRootDir               string
+	CursorTokenSecret             string
+	WebhookHMACSecret             string
+	CursorTokenTTLSeconds         int
+	SandboxIdleTTLDays            int
 }
 
 type ExecRequest struct {
@@ -606,7 +613,141 @@ func (s *Service) AutoExpandMemory(ctx context.Context, sandboxID string) (AutoE
 	if _, err := s.store.GetSandbox(ctx, sandboxID); err != nil {
 		return AutoExpandResult{}, err
 	}
-	return s.backend.EmergencyExpand(ctx, sandboxID)
+	meta, err := s.backend.Get(ctx, sandboxID)
+	if err != nil {
+		return AutoExpandResult{}, err
+	}
+	current := meta.MemoryLimitMB
+	if current <= 0 {
+		return AutoExpandResult{
+			Triggered: false,
+			Reason:    "current memory limit unavailable from runtime metadata",
+		}, nil
+	}
+	target, noOp, reason := autoExpandTargetOneStep(current, s.policy)
+	if noOp {
+		return AutoExpandResult{
+			Triggered: false,
+			FromMB:    current,
+			ToMB:      current,
+			Reason:    reason,
+		}, nil
+	}
+	return s.backend.ExpandMemory(ctx, sandboxID, target)
+}
+
+const labelAutoExpandMemory = "auto_expand_memory"
+
+func autoExpandTargetOneStep(currentMB int64, policy Policy) (targetMB int64, noOp bool, reason string) {
+	target := int64(float64(currentMB) * 2.0)
+	if target <= currentMB {
+		if currentMB <= math.MaxInt64-256 {
+			target = currentMB + 256
+		} else {
+			return 0, true, fmt.Sprintf("current memory limit already at maximum representable (%d MB)", currentMB)
+		}
+	}
+	if policy.MaxExpandStepMB > 0 {
+		stepCap := currentMB + policy.MaxExpandStepMB
+		if target > stepCap {
+			target = stepCap
+		}
+	}
+	if policy.MinExpandMB > 0 && target < policy.MinExpandMB {
+		target = policy.MinExpandMB
+	}
+	if policy.MaxExpandMB > 0 {
+		if target > policy.MaxExpandMB {
+			target = policy.MaxExpandMB
+		}
+		if target <= currentMB {
+			return 0, true, fmt.Sprintf("already at-or-above configured ceiling (%d MB); current=%d MB", policy.MaxExpandMB, currentMB)
+		}
+	} else if target <= currentMB {
+		return 0, true, fmt.Sprintf("cannot compute higher target; current=%d MB", currentMB)
+	}
+	return target, false, ""
+}
+
+func (s *Service) preExecAutoExpandIfNeeded(ctx context.Context, sandboxID string) (AutoExpandResult, error) {
+	record, err := s.store.GetSandbox(ctx, sandboxID)
+	if err != nil {
+		return AutoExpandResult{}, err
+	}
+	if record.Labels == nil {
+		return AutoExpandResult{}, nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(record.Labels[labelAutoExpandMemory]), "true") {
+		return AutoExpandResult{}, nil
+	}
+	pressure, err := s.backend.GetMemoryPressure(ctx, sandboxID)
+	if err != nil {
+		return AutoExpandResult{}, err
+	}
+	if !pressure.NearLimit {
+		return AutoExpandResult{}, nil
+	}
+	res, err := s.AutoExpandMemory(ctx, sandboxID)
+	if err != nil {
+		return AutoExpandResult{Triggered: false, Reason: err.Error()}, err
+	}
+	if res.Triggered && pressure.Reason != "" {
+		if strings.TrimSpace(res.Reason) != "" {
+			res.Reason = pressure.Reason + "; " + res.Reason
+		} else {
+			res.Reason = pressure.Reason
+		}
+	}
+	return res, nil
+}
+
+// pollExecMemoryDuringRun runs until ctx is cancelled (exec finished or cancelled).
+// It reuses preExecAutoExpandIfNeeded so behavior matches pre-exec auto-expand.
+func (s *Service) pollExecMemoryDuringRun(ctx context.Context, execID string) {
+	interval := s.policy.ExecMemoryPollIntervalSeconds
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if ctx.Err() != nil {
+				return
+			}
+			s.mu.RLock()
+			task, ok := s.execMap[execID]
+			if !ok || task.result.Status != "running" {
+				s.mu.RUnlock()
+				return
+			}
+			sandboxID := task.result.SandboxID
+			s.mu.RUnlock()
+
+			res, err := s.preExecAutoExpandIfNeeded(ctx, sandboxID)
+			if err != nil {
+				continue
+			}
+			if !res.Triggered {
+				continue
+			}
+			s.mu.Lock()
+			if t, ok2 := s.execMap[execID]; ok2 && t.result.Status == "running" {
+				if t.result.Recovery != "" {
+					t.result.Recovery += "; " + res.Reason
+				} else {
+					t.result.Recovery = res.Reason
+				}
+			}
+			s.mu.Unlock()
+			if record, err := s.store.GetSandbox(context.Background(), sandboxID); err == nil {
+				s.emitSessionAggregate(context.Background(), record.SessionID, sandboxID, "memory_pressure_warning", "warn")
+			}
+		}
+	}
 }
 
 func (s *Service) EnsureRunning(ctx context.Context, sandboxID string) error {
@@ -829,6 +970,21 @@ func (s *Service) MountPath(ctx context.Context, sandboxID string, req MountRequ
 	mountRoot := strings.TrimSpace(s.policy.MountAllowedRoot)
 	if mountRoot == "" || !filepath.IsAbs(mountRoot) || !isPathWithinRoot(hostPath, mountRoot) {
 		return MountSpec{}, appErr.ErrBadRequest
+	}
+
+	// Docker creates missing host paths as empty dirs on bind mount; reject that explicitly.
+	info, statErr := os.Stat(hostPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return MountSpec{}, fmt.Errorf(
+				"host mount path does not exist (missing directory; server will not auto-create): %w",
+				appErr.ErrNotFound,
+			)
+		}
+		return MountSpec{}, fmt.Errorf("host mount path not accessible: %v: %w", statErr, appErr.ErrBadRequest)
+	}
+	if !info.IsDir() {
+		return MountSpec{}, fmt.Errorf("host mount path must be an existing directory: %w", appErr.ErrBadRequest)
 	}
 
 	mountID, err := id.New("mnt_")
@@ -1054,13 +1210,24 @@ func (s *Service) runExecTask(ctx context.Context, execID string) {
 	if !ok {
 		return
 	}
+	cancelExec := task.cancel
+	defer func() {
+		if cancelExec != nil {
+			cancelExec()
+		}
+	}()
 
-	expandResult, _ := s.backend.PreExecAutoExpand(ctx, task.result.SandboxID)
-	if expandResult.Triggered {
+	expandResult, expandErr := s.preExecAutoExpandIfNeeded(ctx, task.result.SandboxID)
+	if expandErr != nil {
+		task.result.Recovery = "pre-exec auto-expand failed: " + expandErr.Error()
+	} else if expandResult.Triggered {
 		task.result.Recovery = expandResult.Reason
 		if record, err := s.store.GetSandbox(context.Background(), task.result.SandboxID); err == nil {
 			s.emitSessionAggregate(context.Background(), record.SessionID, task.result.SandboxID, "memory_pressure_warning", "warn")
 		}
+	}
+	if s.policy.ExecMemoryPollIntervalSeconds > 0 {
+		go s.pollExecMemoryDuringRun(ctx, execID)
 	}
 	output, err := s.backend.Exec(ctx, task.result.SandboxID, task.result.Command)
 	if isOOMFailure(output, err) {

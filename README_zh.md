@@ -202,6 +202,15 @@ tool = client.as_langchain_tool()
 
 ## 超时、镜像拉取与自动扩容控制
 
+服务端可通过环境变量限制内存扩容范围，并在**单次 exec 运行期间**按间隔轮询 cgroup 压力（需沙箱 `auto_expand_memory=true`），避免长任务在「没有新的 exec」时无法触发扩容。
+
+| 环境变量 | 含义 |
+| --- | --- |
+| `MEMORY_EXPAND_MIN_MB` | 手动/API 指定目标时的下限 |
+| `MEMORY_EXPAND_MAX_MB` | **可选**：每沙箱绝对上限（MB）。**默认 `0` = 不设软件侧上限**，只受扩容 API 的宿主机可用内存率检查 + Docker/内核限制；若设为大于 `0` 则自动/手动目标均不会超过该值 |
+| `MEMORY_EXPAND_MAX_STEP_MB` | 单次自动扩容最多增加多少 MB（与倍增策略取较小步进） |
+| `MEMORY_EXPAND_EXEC_POLL_SECONDS` | **单次 exec 运行中**轮询间隔（秒）；默认 `3`，设为 `0` 关闭轮询（仍保留 exec 开始前的压力检查） |
+
 ## 说明与限制
 
 - code_write 的 `build_language` 可选；若服务端缺少对应镜像，会先拉取，导致耗时增加。
@@ -209,6 +218,8 @@ tool = client.as_langchain_tool()
 - 可在 `POST /sandboxes/{id}/exec` 请求体里直接传 `webhook_url` 一步完成订阅（无需先拿 `exec_id` 再调订阅接口），也可在 `exec` 返回后用 `POST /webhooks/exec/subscribe`。
 - 挂载模式设计为只读（`ro`）。
 - 环境拷贝通过白名单根目录控制宿主机访问边界。
+- 挂载与环境拷贝所指的**宿主机源目录必须已存在**；不存在时返回 `404`，服务端不会在宿主机上自动创建（避免 Docker 绑定挂载静默生成空目录）。
+- `GET /mounts/workspaces` 与 `GET /environments/workspaces` 的响应中包含 `zone_kind`、`agent_guidance` 以及更明确的 `suggested_next_actions`，用于提示 Agent：**挂载列表后应走 `mount_path`，环境区列表后应走 `copy_environment`**，二者勿混用。
 
 ## 延伸文档
 

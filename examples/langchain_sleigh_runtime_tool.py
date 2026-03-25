@@ -22,5 +22,5 @@ _sdk_tool = _client.as_langchain_tool(
 
 @tool("sleigh_runtime", args_schema=_sdk_tool.args_schema, return_direct=False)
 async def sleigh_runtime(**kwargs: Any) -> str:
-    """Unified Sleigh runtime tool for session, sandbox, exec, read/write, and workflow actions."""
+    """Unified Sleigh runtime tool for session, sandbox, exec, read/write."""
     return await asyncio.to_thread(_sdk_tool.invoke, kwargs)

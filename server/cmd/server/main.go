@@ -21,7 +21,7 @@ import (
 
 func main() {
 	cfg := config.FromEnv()
-	backend := dockerbackend.NewBackend(cfg.ImagePullTimeoutSeconds)
+	backend := dockerbackend.NewBackend(cfg.ImagePullTimeoutSeconds, cfg.MaxExpandMB)
 	store, err := sqlitestore.Open(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("init sqlite store failed: %v", err)
@@ -50,21 +50,22 @@ func main() {
 		log.Printf("otel tracing disabled")
 	}
 	service := sandbox.NewService(backend, store, nil, sandbox.Policy{
-		MinExpandMB:                cfg.MinExpandMB,
-		MaxExpandMB:                cfg.MaxExpandMB,
-		MaxExpandStepMB:            cfg.MaxExpandStepMB,
-		ExecTTLDays:                cfg.ExecTTLDays,
-		ExecCleanupIntervalSeconds: cfg.ExecCleanupIntervalSeconds,
-		MountAllowedRoot:           cfg.MountAllowedRoot,
-		EnvironmentAllowedRoot:     cfg.EnvironmentAllowedRoot,
-		WarmPoolSize:               cfg.WarmPoolSize,
-		WarmPoolImage:              cfg.WarmPoolImage,
-		WarmPoolMemoryMB:           cfg.WarmPoolMemoryMB,
-		SnapshotRootDir:            cfg.SnapshotRootDir,
-		WebhookHMACSecret:          cfg.WebhookHMACSecret,
-		CursorTokenSecret:          cfg.CursorTokenSecret,
-		CursorTokenTTLSeconds:      cfg.CursorTokenTTLSeconds,
-		SandboxIdleTTLDays:         cfg.SandboxIdleTTLDays,
+		MinExpandMB:                   cfg.MinExpandMB,
+		MaxExpandMB:                   cfg.MaxExpandMB,
+		MaxExpandStepMB:               cfg.MaxExpandStepMB,
+		ExecMemoryPollIntervalSeconds: cfg.ExecMemoryPollIntervalSeconds,
+		ExecTTLDays:                   cfg.ExecTTLDays,
+		ExecCleanupIntervalSeconds:    cfg.ExecCleanupIntervalSeconds,
+		MountAllowedRoot:              cfg.MountAllowedRoot,
+		EnvironmentAllowedRoot:        cfg.EnvironmentAllowedRoot,
+		WarmPoolSize:                  cfg.WarmPoolSize,
+		WarmPoolImage:                 cfg.WarmPoolImage,
+		WarmPoolMemoryMB:              cfg.WarmPoolMemoryMB,
+		SnapshotRootDir:               cfg.SnapshotRootDir,
+		WebhookHMACSecret:             cfg.WebhookHMACSecret,
+		CursorTokenSecret:             cfg.CursorTokenSecret,
+		CursorTokenTTLSeconds:         cfg.CursorTokenTTLSeconds,
+		SandboxIdleTTLDays:            cfg.SandboxIdleTTLDays,
 	}, tracer)
 	if _, err := service.RefillWarmPool(context.Background()); err != nil {
 		log.Printf("warm pool refill on startup failed: %v", err)

@@ -7,81 +7,85 @@ import (
 )
 
 const (
-	defaultHTTPAddr                   = ":10122"
-	defaultReadTimeout                = 10 * time.Second
-	defaultWriteTimeout               = 6 * time.Minute
-	defaultShutdownTimeout            = 10 * time.Second
-	defaultVersion                    = "dev"
-	defaultDBPath                     = "./data/runtime.db"
-	defaultMinExpandMB                = 64
-	defaultMaxExpandMB                = 4096
-	defaultMaxExpandStepMB            = 2048
-	defaultExecTTLDays                = 14
-	defaultWarmPoolSize               = 1
-	defaultWarmPoolImage              = "python:3.11-slim"
-	defaultWarmPoolMemory             = 256
-	defaultSnapshotRootDir            = "./data/snapshots"
-	defaultCursorTokenTTL             = 3600
-	defaultExecCleanupIntervalSeconds = 3600
-	defaultImagePullTimeoutSeconds    = 120
-	defaultSandboxIdleTTLDays         = 14
-	defaultMountAllowedRoot           = "/opt/sleigh-runtime/mount-root-default"
-	defaultEnvironmentAllowedRoot     = "/opt/sleigh-runtime/environment-root-default"
-	defaultOTELEndpoint               = ""
-	defaultWebhookHMACSecret          = "dev-webhook-secret"
+	defaultHTTPAddr        = ":10122"
+	defaultReadTimeout     = 10 * time.Second
+	defaultWriteTimeout    = 6 * time.Minute
+	defaultShutdownTimeout = 10 * time.Second
+	defaultVersion         = "dev"
+	defaultDBPath          = "./data/runtime.db"
+	defaultMinExpandMB     = 64
+	// 0 = no per-container absolute cap (only host allowAutoExpand + Docker limits apply).
+	defaultMaxExpandMB                int64 = 0
+	defaultMaxExpandStepMB                  = 2048
+	defaultExecMemoryPollSeconds            = 3
+	defaultExecTTLDays                      = 14
+	defaultWarmPoolSize                     = 1
+	defaultWarmPoolImage                    = "python:3.11-slim"
+	defaultWarmPoolMemory                   = 256
+	defaultSnapshotRootDir                  = "./data/snapshots"
+	defaultCursorTokenTTL                   = 3600
+	defaultExecCleanupIntervalSeconds       = 3600
+	defaultImagePullTimeoutSeconds          = 120
+	defaultSandboxIdleTTLDays               = 14
+	defaultMountAllowedRoot                 = "/opt/sleigh-runtime/mount-root-default"
+	defaultEnvironmentAllowedRoot           = "/opt/sleigh-runtime/environment-root-default"
+	defaultOTELEndpoint                     = ""
+	defaultWebhookHMACSecret                = "dev-webhook-secret"
 )
 
 type Config struct {
-	HTTPAddr                   string
-	ReadTimeout                time.Duration
-	WriteTimeout               time.Duration
-	ShutdownTimeout            time.Duration
-	Version                    string
-	DBPath                     string
-	MinExpandMB                int64
-	MaxExpandMB                int64
-	MaxExpandStepMB            int64
-	ExecTTLDays                int
-	WarmPoolSize               int
-	WarmPoolImage              string
-	WarmPoolMemoryMB           int64
-	SnapshotRootDir            string
-	ImagePullTimeoutSeconds    int
-	SandboxIdleTTLDays         int
-	OTELEndpoint               string
-	WebhookHMACSecret          string
-	CursorTokenSecret          string
-	CursorTokenTTLSeconds      int
-	ExecCleanupIntervalSeconds int
-	MountAllowedRoot           string
-	EnvironmentAllowedRoot     string
+	HTTPAddr                      string
+	ReadTimeout                   time.Duration
+	WriteTimeout                  time.Duration
+	ShutdownTimeout               time.Duration
+	Version                       string
+	DBPath                        string
+	MinExpandMB                   int64
+	MaxExpandMB                   int64
+	MaxExpandStepMB               int64
+	ExecMemoryPollIntervalSeconds int
+	ExecTTLDays                   int
+	WarmPoolSize                  int
+	WarmPoolImage                 string
+	WarmPoolMemoryMB              int64
+	SnapshotRootDir               string
+	ImagePullTimeoutSeconds       int
+	SandboxIdleTTLDays            int
+	OTELEndpoint                  string
+	WebhookHMACSecret             string
+	CursorTokenSecret             string
+	CursorTokenTTLSeconds         int
+	ExecCleanupIntervalSeconds    int
+	MountAllowedRoot              string
+	EnvironmentAllowedRoot        string
 }
 
 func FromEnv() Config {
 	cfg := Config{
-		HTTPAddr:                   getEnv("SERVER_ADDR", defaultHTTPAddr),
-		ReadTimeout:                defaultReadTimeout,
-		WriteTimeout:               defaultWriteTimeout,
-		ShutdownTimeout:            defaultShutdownTimeout,
-		Version:                    getEnv("SERVER_VERSION", defaultVersion),
-		DBPath:                     getEnv("SERVER_DB_PATH", defaultDBPath),
-		MinExpandMB:                getEnvInt64("MEMORY_EXPAND_MIN_MB", defaultMinExpandMB),
-		MaxExpandMB:                getEnvInt64("MEMORY_EXPAND_MAX_MB", defaultMaxExpandMB),
-		MaxExpandStepMB:            getEnvInt64("MEMORY_EXPAND_MAX_STEP_MB", defaultMaxExpandStepMB),
-		ExecTTLDays:                getEnvInt("EXEC_TASK_TTL_DAYS", defaultExecTTLDays),
-		WarmPoolSize:               getEnvInt("WARM_POOL_SIZE", defaultWarmPoolSize),
-		WarmPoolImage:              getEnv("WARM_POOL_IMAGE", defaultWarmPoolImage),
-		WarmPoolMemoryMB:           getEnvInt64("WARM_POOL_MEMORY_MB", defaultWarmPoolMemory),
-		SnapshotRootDir:            getEnv("SNAPSHOT_ROOT_DIR", defaultSnapshotRootDir),
-		ImagePullTimeoutSeconds:    getEnvInt("IMAGE_PULL_TIMEOUT_SECONDS", defaultImagePullTimeoutSeconds),
-		SandboxIdleTTLDays:         getEnvInt("SANDBOX_IDLE_TTL_DAYS", defaultSandboxIdleTTLDays),
-		OTELEndpoint:               getEnv("SERVER_OTEL_EXPORTER_OTLP_ENDPOINT", defaultOTELEndpoint),
-		WebhookHMACSecret:          getEnv("WEBHOOK_HMAC_SECRET", defaultWebhookHMACSecret),
-		CursorTokenSecret:          getEnv("CURSOR_TOKEN_SECRET", "dev-cursor-secret"),
-		CursorTokenTTLSeconds:      getEnvInt("CURSOR_TOKEN_TTL_SECONDS", defaultCursorTokenTTL),
-		ExecCleanupIntervalSeconds: getEnvInt("EXEC_CLEANUP_INTERVAL_SECONDS", defaultExecCleanupIntervalSeconds),
-		MountAllowedRoot:           getEnv("SERVER_MOUNT_ALLOWED_ROOT", defaultMountAllowedRoot),
-		EnvironmentAllowedRoot:     getEnv("SERVER_ENV_ALLOWED_ROOT", defaultEnvironmentAllowedRoot),
+		HTTPAddr:                      getEnv("SERVER_ADDR", defaultHTTPAddr),
+		ReadTimeout:                   defaultReadTimeout,
+		WriteTimeout:                  defaultWriteTimeout,
+		ShutdownTimeout:               defaultShutdownTimeout,
+		Version:                       getEnv("SERVER_VERSION", defaultVersion),
+		DBPath:                        getEnv("SERVER_DB_PATH", defaultDBPath),
+		MinExpandMB:                   getEnvInt64("MEMORY_EXPAND_MIN_MB", defaultMinExpandMB),
+		MaxExpandMB:                   getEnvInt64("MEMORY_EXPAND_MAX_MB", defaultMaxExpandMB),
+		MaxExpandStepMB:               getEnvInt64("MEMORY_EXPAND_MAX_STEP_MB", defaultMaxExpandStepMB),
+		ExecMemoryPollIntervalSeconds: getEnvInt("MEMORY_EXPAND_EXEC_POLL_SECONDS", defaultExecMemoryPollSeconds),
+		ExecTTLDays:                   getEnvInt("EXEC_TASK_TTL_DAYS", defaultExecTTLDays),
+		WarmPoolSize:                  getEnvInt("WARM_POOL_SIZE", defaultWarmPoolSize),
+		WarmPoolImage:                 getEnv("WARM_POOL_IMAGE", defaultWarmPoolImage),
+		WarmPoolMemoryMB:              getEnvInt64("WARM_POOL_MEMORY_MB", defaultWarmPoolMemory),
+		SnapshotRootDir:               getEnv("SNAPSHOT_ROOT_DIR", defaultSnapshotRootDir),
+		ImagePullTimeoutSeconds:       getEnvInt("IMAGE_PULL_TIMEOUT_SECONDS", defaultImagePullTimeoutSeconds),
+		SandboxIdleTTLDays:            getEnvInt("SANDBOX_IDLE_TTL_DAYS", defaultSandboxIdleTTLDays),
+		OTELEndpoint:                  getEnv("SERVER_OTEL_EXPORTER_OTLP_ENDPOINT", defaultOTELEndpoint),
+		WebhookHMACSecret:             getEnv("WEBHOOK_HMAC_SECRET", defaultWebhookHMACSecret),
+		CursorTokenSecret:             getEnv("CURSOR_TOKEN_SECRET", "dev-cursor-secret"),
+		CursorTokenTTLSeconds:         getEnvInt("CURSOR_TOKEN_TTL_SECONDS", defaultCursorTokenTTL),
+		ExecCleanupIntervalSeconds:    getEnvInt("EXEC_CLEANUP_INTERVAL_SECONDS", defaultExecCleanupIntervalSeconds),
+		MountAllowedRoot:              getEnv("SERVER_MOUNT_ALLOWED_ROOT", defaultMountAllowedRoot),
+		EnvironmentAllowedRoot:        getEnv("SERVER_ENV_ALLOWED_ROOT", defaultEnvironmentAllowedRoot),
 	}
 
 	return cfg

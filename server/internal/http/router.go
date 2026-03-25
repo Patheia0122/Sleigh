@@ -1192,7 +1192,7 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		})
 		return
 	}
-	copyOut, copyErr := copySandboxDirectoryToHost(runCtx, sandboxID, sandboxDirPath, cwd)
+	copyOut, copyErr := copySandboxTreeForCodeWrite(runCtx, sandboxID, sandboxFilePath, sandboxDirPath, cwd)
 	if copyErr != nil {
 		stdout, omittedOut, truncOut := applyOutputLimits(copyOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(copyOut.stderr, maxOutputBytes, maxLines)
@@ -1203,7 +1203,7 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			Truncated:    truncOut || truncErr,
 			Stdout:       stdout,
 			Stderr:       stderr,
-			Error:        "copy sandbox directory to host failed",
+			Error:        "copy sandbox sources to host failed",
 			BuildStatus:  "not_run",
 			OmittedBytes: omittedOut + omittedErr,
 		})
@@ -1283,7 +1283,7 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		writeJSON(w, stdhttp.StatusOK, resp)
 		return
 	}
-	syncOut, syncErr := copyHostDirectoryToSandbox(runCtx, sandboxID, sandboxDirPath, cwd)
+	syncOut, syncErr := copyHostSingleFileToSandbox(runCtx, sandboxID, sandboxFilePath, sandboxDirPath, cwd)
 	if syncErr != nil {
 		resp.Status = "error"
 		resp.Error = "copy code changes back to sandbox failed"
@@ -1660,14 +1660,27 @@ func (r *Router) listMountWorkspaces(w stdhttp.ResponseWriter, req *stdhttp.Requ
 		"entries":       entries,
 		"truncated":     truncated,
 		"omitted_count": omittedCount,
+		"zone_kind":     "mount_read_only",
+		"agent_guidance": map[string]any{
+			"correct_next_operation": "mount_path",
+			"correct_next_summary":   "Attach one listed directory from this mount zone into the sandbox as a read-only bind. Use workspace_path = path relative to allowed_root (or leading slash form accepted by server) and container_path = absolute path inside the sandbox.",
+			"wrong_next_operation":   "copy_environment",
+			"wrong_next_warning":     "Do NOT use copy_environment for paths from this response. copy_environment only applies to directories listed by GET /environments/workspaces (environment zone), which copies files into the sandbox instead of mounting.",
+		},
 		"suggested_next_actions": []map[string]any{
 			{
-				"action": "mount_path",
+				"action":      "mount_path",
+				"description": "Read-only mount from mount-zone allowlist into the sandbox (not a file copy).",
 				"required_fields": []string{
 					"session_token",
 					"sandbox_id",
 					"workspace_path",
 					"container_path",
+				},
+				"parameter_semantics": map[string]string{
+					"workspace_path":   "Directory under SERVER_MOUNT_ALLOWED_ROOT (this list).",
+					"container_path":   "Absolute mount point inside the sandbox container.",
+					"environment_path": "INVALID here — that field is only for copy_environment after list_environment_workspaces.",
 				},
 			},
 		},
@@ -1691,14 +1704,27 @@ func (r *Router) listEnvironmentWorkspaces(w stdhttp.ResponseWriter, req *stdhtt
 		"entries":       entries,
 		"truncated":     truncated,
 		"omitted_count": omittedCount,
+		"zone_kind":     "environment_copy",
+		"agent_guidance": map[string]any{
+			"correct_next_operation": "copy_environment",
+			"correct_next_summary":   "Copy one listed directory from this environment zone into the sandbox filesystem (docker cp). Use environment_path = path relative to allowed_root and sandbox_path = absolute destination inside the sandbox (not '/').",
+			"wrong_next_operation":   "mount_path",
+			"wrong_next_warning":     "Do NOT use mount_path for paths from this response. mount_path only applies to directories from GET /mounts/workspaces (mount zone). Mounting does not copy environment templates; use copy_environment for this list.",
+		},
 		"suggested_next_actions": []map[string]any{
 			{
-				"action": "copy_environment",
+				"action":      "copy_environment",
+				"description": "Copy host environment-zone directory into sandbox path (not a bind mount).",
 				"required_fields": []string{
 					"session_token",
 					"sandbox_id",
 					"environment_path",
 					"sandbox_path",
+				},
+				"parameter_semantics": map[string]string{
+					"environment_path": "Directory under SERVER_ENV_ALLOWED_ROOT (this list).",
+					"sandbox_path":     "Absolute destination directory inside the sandbox.",
+					"workspace_path":   "INVALID here — that field is only for mount_path after list_mount_workspaces.",
 				},
 			},
 		},
@@ -1740,11 +1766,18 @@ func (r *Router) copyEnvironment(w stdhttp.ResponseWriter, req *stdhttp.Request)
 	}
 	hostInfo, hostErr := os.Stat(hostPath)
 	if hostErr != nil {
-		writeError(w, stdhttp.StatusBadRequest, fmt.Errorf("workspace_path not found: %w", hostErr))
+		if os.IsNotExist(hostErr) {
+			writeDomainError(w, fmt.Errorf(
+				"environment host path does not exist (missing directory; server will not auto-create): %w",
+				appErr.ErrNotFound,
+			))
+			return
+		}
+		writeError(w, stdhttp.StatusBadRequest, fmt.Errorf("environment host path not accessible: %w", hostErr))
 		return
 	}
 	if !hostInfo.IsDir() {
-		writeError(w, stdhttp.StatusBadRequest, errors.New("workspace_path must be a directory"))
+		writeError(w, stdhttp.StatusBadRequest, errors.New("environment host path must be an existing directory"))
 		return
 	}
 	sandboxPath, err := normalizeSandboxCopyPath(body.SandboxPath)
@@ -2156,6 +2189,115 @@ func sandboxContainerName(sandboxID string) string {
 	return "hwr-sbx-" + strings.TrimSpace(sandboxID)
 }
 
+// qualityWorkspaceConfigNames: small config/manifest files copied upward from the edited
+// directory so pre-commit and language detection work without copying the whole sandbox tree.
+var qualityWorkspaceConfigNames = []string{
+	".pre-commit-config.yaml",
+	".pre-commit-config.yml",
+	"pyproject.toml",
+	"poetry.lock",
+	"requirements.txt",
+	"package.json",
+	"package-lock.json",
+	"pnpm-lock.yaml",
+	"yarn.lock",
+	"go.mod",
+	"go.sum",
+	"go.work",
+	"Cargo.toml",
+	"Cargo.lock",
+	"pom.xml",
+	"build.gradle",
+	"build.gradle.kts",
+	"tsconfig.json",
+	"jsconfig.json",
+	".eslintrc.cjs",
+	".eslintrc.json",
+	"ruff.toml",
+	"setup.cfg",
+	"tox.ini",
+	"Makefile",
+}
+
+func copySandboxTreeForCodeWrite(
+	ctx context.Context,
+	sandboxID, sandboxFilePath, sandboxDirPath, cwd string,
+) (commandOutput, error) {
+	rel, err := filepath.Rel(sandboxDirPath, sandboxFilePath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return commandOutput{}, fmt.Errorf("sandbox_path must be under parent directory")
+	}
+	hostTarget := filepath.Join(cwd, rel)
+	out, err := copySandboxFileToHost(ctx, sandboxID, sandboxFilePath, hostTarget)
+	if err != nil {
+		return out, err
+	}
+	cfgOut := copyWorkspaceUpstreamConfigs(ctx, sandboxID, sandboxDirPath, cwd)
+	return combineCommandOutputs(out, cfgOut), nil
+}
+
+func copyWorkspaceUpstreamConfigs(ctx context.Context, sandboxID, sandboxDirPath, cwd string) commandOutput {
+	seen := make(map[string]struct{})
+	var combined commandOutput
+	for d := sandboxDirPath; d != "/" && d != "" && d != "."; d = filepath.Dir(d) {
+		for _, name := range qualityWorkspaceConfigNames {
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			containerPath := filepath.Join(d, name)
+			hostPath := filepath.Join(cwd, name)
+			if _, statErr := os.Stat(hostPath); statErr == nil {
+				seen[name] = struct{}{}
+				continue
+			}
+			if !dockerFileExists(ctx, sandboxID, containerPath) {
+				continue
+			}
+			out, cpErr := copySandboxFileToHost(ctx, sandboxID, containerPath, hostPath)
+			combined = combineCommandOutputs(combined, out)
+			if cpErr == nil {
+				seen[name] = struct{}{}
+			}
+		}
+	}
+	return combined
+}
+
+func dockerFileExists(ctx context.Context, sandboxID, containerPath string) bool {
+	container := sandboxContainerName(sandboxID)
+	p := filepath.ToSlash(filepath.Clean(containerPath))
+	out, err := runCommand(ctx, "", "docker", "exec", container, "test", "-f", p)
+	_ = out
+	return err == nil
+}
+
+func copySandboxFileToHost(ctx context.Context, sandboxID, containerPath, hostPath string) (commandOutput, error) {
+	if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
+		return commandOutput{}, err
+	}
+	container := sandboxContainerName(sandboxID)
+	src := fmt.Sprintf("%s:%s", container, filepath.ToSlash(filepath.Clean(containerPath)))
+	return runCommand(ctx, "", "docker", "cp", src, hostPath)
+}
+
+func copyHostFileToSandbox(ctx context.Context, sandboxID, hostPath, containerPath string) (commandOutput, error) {
+	container := sandboxContainerName(sandboxID)
+	dst := fmt.Sprintf("%s:%s", container, filepath.ToSlash(filepath.Clean(containerPath)))
+	return runCommand(ctx, "", "docker", "cp", hostPath, dst)
+}
+
+func copyHostSingleFileToSandbox(
+	ctx context.Context,
+	sandboxID, sandboxFilePath, sandboxDirPath, cwd string,
+) (commandOutput, error) {
+	rel, err := filepath.Rel(sandboxDirPath, sandboxFilePath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return commandOutput{}, fmt.Errorf("sandbox_path must be under parent directory")
+	}
+	hostFile := filepath.Join(cwd, rel)
+	return copyHostFileToSandbox(ctx, sandboxID, hostFile, sandboxFilePath)
+}
+
 func ensureSandboxDirectory(ctx context.Context, sandboxID, sandboxPath string) (commandOutput, error) {
 	container := sandboxContainerName(sandboxID)
 	return runCommand(
@@ -2167,18 +2309,6 @@ func ensureSandboxDirectory(ctx context.Context, sandboxID, sandboxPath string) 
 		"sh",
 		"-lc",
 		"mkdir -p "+shQuote(sandboxPath),
-	)
-}
-
-func copySandboxDirectoryToHost(ctx context.Context, sandboxID, sandboxPath, hostDir string) (commandOutput, error) {
-	container := sandboxContainerName(sandboxID)
-	return runCommand(
-		ctx,
-		"",
-		"docker",
-		"cp",
-		fmt.Sprintf("%s:%s/.", container, sandboxPath),
-		hostDir,
 	)
 }
 

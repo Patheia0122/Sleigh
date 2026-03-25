@@ -18,24 +18,28 @@ import (
 )
 
 const (
-	defaultCreateImage                  = "alpine:3.20"
-	defaultCreateMemoryLimitMB          = 256
-	defaultMaxMemoryLimitMB       int64 = 4096
-	preExecExpandThresholdPercent       = 85.0
-	emergencyExpandFactor               = 2.0
+	defaultCreateImage            = "alpine:3.20"
+	defaultCreateMemoryLimitMB    = 256
+	preExecExpandThresholdPercent = 85.0
+	emergencyExpandFactor         = 2.0
 )
 
 type Backend struct {
-	imagePullTimeout time.Duration
+	imagePullTimeout  time.Duration
+	memoryExpandMaxMB int64
 }
 
-func NewBackend(imagePullTimeoutSeconds int) *Backend {
+// NewBackend creates a Docker sandbox backend. memoryExpandMaxMB caps agent-driven
+// memory expansion when > 0; if <= 0, there is no software-side absolute MB cap (host
+// memory checks in the HTTP layer and Docker still apply).
+func NewBackend(imagePullTimeoutSeconds int, memoryExpandMaxMB int64) *Backend {
 	timeout := time.Duration(imagePullTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
 	return &Backend{
-		imagePullTimeout: timeout,
+		imagePullTimeout:  timeout,
+		memoryExpandMaxMB: memoryExpandMaxMB,
 	}
 }
 
@@ -302,21 +306,12 @@ func (b *Backend) DeleteImageIfUnused(ctx context.Context, image string) (bool, 
 	return true, "deleted", nil
 }
 
+// PreExecAutoExpand is a no-op at the Docker layer; pre-exec automatic expansion is
+// implemented in sandbox.Service (label auto_expand_memory + pressure + policy).
 func (b *Backend) PreExecAutoExpand(ctx context.Context, sandboxID string) (sandbox.AutoExpandResult, error) {
-	pressure, err := b.GetMemoryPressure(ctx, sandboxID)
-	if err != nil {
-		return sandbox.AutoExpandResult{}, nil
-	}
-	if !pressure.NearLimit {
-		return sandbox.AutoExpandResult{}, nil
-	}
-
-	return sandbox.AutoExpandResult{
-		Triggered: true,
-		FromMB:    pressure.CurrentLimitMB,
-		ToMB:      pressure.CurrentLimitMB,
-		Reason:    pressure.Reason,
-	}, nil
+	_ = ctx
+	_ = sandboxID
+	return sandbox.AutoExpandResult{}, nil
 }
 
 func (b *Backend) EmergencyExpand(ctx context.Context, sandboxID string) (sandbox.AutoExpandResult, error) {
@@ -332,15 +327,25 @@ func (b *Backend) EmergencyExpand(ctx context.Context, sandboxID string) (sandbo
 	if target <= currentMB {
 		target = currentMB + 256
 	}
-	if target > defaultMaxMemoryLimitMB {
-		target = defaultMaxMemoryLimitMB
+	if b.memoryExpandMaxMB > 0 && target > b.memoryExpandMaxMB {
+		target = b.memoryExpandMaxMB
 	}
 	if target <= currentMB {
-		return sandbox.AutoExpandResult{}, nil
+		reason := "cannot increase memory limit further"
+		if b.memoryExpandMaxMB > 0 {
+			reason = fmt.Sprintf("already at or above docker memory expand cap (%d MB)", b.memoryExpandMaxMB)
+		}
+		return sandbox.AutoExpandResult{
+			Triggered: false,
+			FromMB:    currentMB,
+			ToMB:      currentMB,
+			Reason:    reason,
+		}, nil
 	}
 
 	container := containerName(sandboxID)
-	if _, err := dockerJSON(ctx, "update", "--memory", fmt.Sprintf("%dm", target), container); err != nil {
+	targetStr := fmt.Sprintf("%dm", target)
+	if _, err := dockerJSON(ctx, "update", "--memory", targetStr, "--memory-swap", targetStr, container); err != nil {
 		return sandbox.AutoExpandResult{}, err
 	}
 
@@ -356,8 +361,8 @@ func (b *Backend) ExpandMemory(ctx context.Context, sandboxID string, targetMB i
 	if targetMB <= 0 {
 		return sandbox.AutoExpandResult{}, appErr.ErrBadRequest
 	}
-	if targetMB > defaultMaxMemoryLimitMB {
-		targetMB = defaultMaxMemoryLimitMB
+	if b.memoryExpandMaxMB > 0 && targetMB > b.memoryExpandMaxMB {
+		targetMB = b.memoryExpandMaxMB
 	}
 
 	currentMB, err := b.currentMemoryLimitMB(ctx, sandboxID)
@@ -409,30 +414,54 @@ func (b *Backend) GetMemoryPressure(ctx context.Context, sandboxID string) (sand
 		return sandbox.MemoryPressure{}, err
 	}
 
-	if stats.limitBytes <= 0 {
-		return sandbox.MemoryPressure{
-			NearLimit:      false,
-			UsagePercent:   0,
-			CurrentBytes:   stats.currentBytes,
-			LimitBytes:     stats.limitBytes,
-			CurrentLimitMB: 0,
-			Reason:         "memory limit unavailable",
-		}, nil
+	var (
+		usagePercent float64
+		limitBytes   int64
+		currentBytes int64
+	)
+
+	if stats.usagePercentFromDocker != nil {
+		usagePercent = *stats.usagePercentFromDocker
+		if meta.MemoryLimitMB > 0 {
+			limitBytes = meta.MemoryLimitMB * 1024 * 1024
+			currentBytes = int64(float64(limitBytes) * usagePercent / 100.0)
+		}
+	} else {
+		limitBytes = stats.limitBytes
+		if limitBytes <= 0 && meta.MemoryLimitMB > 0 {
+			limitBytes = meta.MemoryLimitMB * 1024 * 1024
+		}
+		currentBytes = stats.currentBytes
+		if limitBytes <= 0 {
+			return sandbox.MemoryPressure{
+				NearLimit:      false,
+				UsagePercent:   0,
+				CurrentBytes:   stats.currentBytes,
+				LimitBytes:     stats.limitBytes,
+				CurrentLimitMB: 0,
+				Reason:         "memory limit unavailable (no cgroup limit and docker memory unset)",
+			}, nil
+		}
+		usagePercent = (float64(stats.currentBytes) / float64(limitBytes)) * 100
 	}
 
-	usagePercent := (float64(stats.currentBytes) / float64(stats.limitBytes)) * 100
 	near := usagePercent >= preExecExpandThresholdPercent
 	reason := ""
 	if near {
 		reason = fmt.Sprintf("memory usage %.2f%% exceeded threshold %.2f%%", usagePercent, preExecExpandThresholdPercent)
 	}
 
+	currentLimitMB := int64(0)
+	if limitBytes > 0 {
+		currentLimitMB = limitBytes / (1024 * 1024)
+	}
+
 	return sandbox.MemoryPressure{
 		NearLimit:      near,
 		UsagePercent:   usagePercent,
-		CurrentBytes:   stats.currentBytes,
-		LimitBytes:     stats.limitBytes,
-		CurrentLimitMB: stats.limitBytes / (1024 * 1024),
+		CurrentBytes:   currentBytes,
+		LimitBytes:     limitBytes,
+		CurrentLimitMB: currentLimitMB,
 		Reason:         reason,
 	}, nil
 }
@@ -600,23 +629,34 @@ func (b *Backend) memoryUsagePercent(ctx context.Context, container string) (flo
 type containerMemoryStats struct {
 	currentBytes int64
 	limitBytes   int64
+	// usagePercentFromDocker is set when cgroup stats are unavailable; Docker's MemPerc
+	// is used directly (same basis as `docker stats`).
+	usagePercentFromDocker *float64
 }
 
 func (b *Backend) readContainerMemoryStats(ctx context.Context, container string) (containerMemoryStats, error) {
-	pidText, err := dockerJSON(ctx, "inspect", container, "--format", "{{.State.Pid}}")
+	stats, err := b.readContainerMemoryStatsFromCgroupV2(ctx, container)
+	if err == nil {
+		return stats, nil
+	}
+	statsV1, errV1 := b.readContainerMemoryStatsFromCgroupV1(ctx, container)
+	if errV1 == nil {
+		return statsV1, nil
+	}
+	statsDocker, errDocker := b.readContainerMemoryStatsFromDocker(ctx, container)
+	if errDocker == nil {
+		return statsDocker, nil
+	}
+	return containerMemoryStats{}, fmt.Errorf("memory stats: cgroup v2: %v; cgroup v1: %v; docker: %w", err, errV1, errDocker)
+}
+
+func (b *Backend) readContainerMemoryStatsFromCgroupV2(ctx context.Context, container string) (containerMemoryStats, error) {
+	pid, err := b.runningContainerPID(ctx, container)
 	if err != nil {
-		if isDockerNotFoundError(err) {
-			return containerMemoryStats{}, appErr.ErrNotFound
-		}
 		return containerMemoryStats{}, err
 	}
-	pidText = strings.TrimSpace(pidText)
-	pid, err := strconv.Atoi(pidText)
-	if err != nil || pid <= 0 {
-		return containerMemoryStats{}, fmt.Errorf("container is not running")
-	}
 
-	cgroupRelPath, err := readProcessCgroupPath(pid)
+	cgroupRelPath, err := readProcessCgroupPathV2(pid)
 	if err != nil {
 		return containerMemoryStats{}, err
 	}
@@ -652,7 +692,70 @@ func (b *Backend) readContainerMemoryStats(ctx context.Context, container string
 	}, nil
 }
 
-func readProcessCgroupPath(pid int) (string, error) {
+func (b *Backend) readContainerMemoryStatsFromCgroupV1(ctx context.Context, container string) (containerMemoryStats, error) {
+	pid, err := b.runningContainerPID(ctx, container)
+	if err != nil {
+		return containerMemoryStats{}, err
+	}
+	rel, err := readProcessCgroupMemoryPathV1(pid)
+	if err != nil {
+		return containerMemoryStats{}, err
+	}
+	base := filepath.Join("/sys/fs/cgroup/memory", strings.TrimPrefix(rel, "/"))
+
+	usageRaw, err := os.ReadFile(filepath.Join(base, "memory.usage_in_bytes"))
+	if err != nil {
+		return containerMemoryStats{}, fmt.Errorf("read memory.usage_in_bytes: %w", err)
+	}
+	limitRaw, err := os.ReadFile(filepath.Join(base, "memory.limit_in_bytes"))
+	if err != nil {
+		return containerMemoryStats{}, fmt.Errorf("read memory.limit_in_bytes: %w", err)
+	}
+	currentBytes, err := strconv.ParseInt(strings.TrimSpace(string(usageRaw)), 10, 64)
+	if err != nil {
+		return containerMemoryStats{}, fmt.Errorf("parse usage_in_bytes: %w", err)
+	}
+	limitBytes, err := strconv.ParseInt(strings.TrimSpace(string(limitRaw)), 10, 64)
+	if err != nil {
+		return containerMemoryStats{}, fmt.Errorf("parse limit_in_bytes: %w", err)
+	}
+	// cgroup v1 uses a very large sentinel for "no limit"
+	if limitBytes <= 0 || limitBytes > 1<<60 {
+		limitBytes = 0
+	}
+
+	return containerMemoryStats{
+		currentBytes: currentBytes,
+		limitBytes:   limitBytes,
+	}, nil
+}
+
+func (b *Backend) readContainerMemoryStatsFromDocker(ctx context.Context, container string) (containerMemoryStats, error) {
+	p, err := b.memoryUsagePercent(ctx, container)
+	if err != nil {
+		return containerMemoryStats{}, err
+	}
+	pp := p
+	return containerMemoryStats{usagePercentFromDocker: &pp}, nil
+}
+
+func (b *Backend) runningContainerPID(ctx context.Context, container string) (int, error) {
+	pidText, err := dockerJSON(ctx, "inspect", container, "--format", "{{.State.Pid}}")
+	if err != nil {
+		if isDockerNotFoundError(err) {
+			return 0, appErr.ErrNotFound
+		}
+		return 0, err
+	}
+	pidText = strings.TrimSpace(pidText)
+	pid, err := strconv.Atoi(pidText)
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("container is not running")
+	}
+	return pid, nil
+}
+
+func readProcessCgroupPathV2(pid int) (string, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	if err != nil {
 		return "", fmt.Errorf("read process cgroup: %w", err)
@@ -668,4 +771,22 @@ func readProcessCgroupPath(pid int) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("cgroup v2 path not found for pid %d", pid)
+}
+
+func readProcessCgroupMemoryPathV1(pid int) (string, error) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return "", fmt.Errorf("read process cgroup: %w", err)
+	}
+
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		if parts[1] == "memory" {
+			return parts[2], nil
+		}
+	}
+	return "", fmt.Errorf("cgroup v1 memory path not found for pid %d", pid)
 }

@@ -207,6 +207,8 @@ More complete Agent-friendly example:
 - You can pass `webhook_url` on `POST /sandboxes/{id}/exec` to subscribe in one shot (no separate `exec_id` round-trip), or use `POST /webhooks/exec/subscribe` after `exec` returns.
 - Mount mode is read-only (`ro`) by design.
 - Environment copy is guarded by allowlisted root boundaries.
+- Mount and environment-copy **host** source paths must already exist on the server; missing paths return `404` (no auto-create on the host — Docker bind mounts would otherwise create empty dirs).
+- `GET /mounts/workspaces` vs `GET /environments/workspaces` responses include `zone_kind`, `agent_guidance`, and expanded `suggested_next_actions` so Agents use **mount_path** after the mount list and **copy_environment** after the environment list (not the other way around).
 - Requires Linux host
 - Currently Docker runtime only
 - Sandboxes share host kernel

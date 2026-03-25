@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"sleigh-runtime/server/internal/config"
@@ -28,5 +29,17 @@ func TestHealthzReturnsOK(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("expected content type application/json, got %q", got)
+	}
+}
+
+func TestCodeWriteSingleFileRelativePath(t *testing.T) {
+	dir := filepath.FromSlash("/workspace/pkg")
+	file := filepath.FromSlash("/workspace/pkg/main.go")
+	rel, err := filepath.Rel(dir, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel != "main.go" {
+		t.Fatalf("expected main.go, got %q", rel)
 	}
 }
