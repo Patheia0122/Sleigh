@@ -38,10 +38,13 @@ else
   SUDO="sudo"
 fi
 
-if command -v go >/dev/null 2>&1; then
-  GO_BIN="$(command -v go)"
-elif [[ -x "/usr/local/go/bin/go" ]]; then
+# Prefer the official Linux tarball install (/usr/local/go) over conda/miniconda or other shims
+# earlier on PATH — otherwise an older `go` triggers automatic toolchain download (proxy.golang.org)
+# and often times out on restricted networks.
+if [[ -x "/usr/local/go/bin/go" ]]; then
   GO_BIN="/usr/local/go/bin/go"
+elif command -v go >/dev/null 2>&1; then
+  GO_BIN="$(command -v go)"
 else
   GO_BIN=""
 fi
@@ -460,6 +463,12 @@ fi
 echo "$(msg building)"
 (
   cd "${PROJECT_ROOT}/server"
+  # Module/toolchain fetches: proxy.golang.org is often slow or blocked in CN.
+  export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
+  export GOSUMDB="${GOSUMDB:-sum.golang.google.cn}"
+  # If PATH picks an older go (e.g. conda 1.21) but go.mod needs 1.26, Go must be allowed to download
+  # the matching toolchain (GOTOOLCHAIN=local would block that). User may still set GOTOOLCHAIN=local
+  # when their go version already satisfies go.mod.
   GOPATH="$(pwd)/.gopath" GOMODCACHE="$(pwd)/.gopath/pkg/mod" "${GO_BIN}" build -o /tmp/sleigh-server ./cmd/server
 )
 

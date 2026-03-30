@@ -361,7 +361,8 @@ Request body:
   - `sandbox_path` (required absolute sandbox file path)
   - `write_mode` (`context_edit` default, or `replace_file`)
   - `build_language` (optional: `go`, `python`, `node`, `rust`, `java`, ...)
-  - `timeout_seconds`, `max_output_bytes`, `max_lines` (optional)
+  - `timeout_seconds` (optional; default **120** — copy + pre-commit + Docker quality/build can exceed short deadlines; first-time image pull is slower)
+  - `max_output_bytes`, `max_lines` (optional)
 - `context_edit` mode:
   - `old_text`, `new_text` (required)
   - `before_context`, `after_context`, `occurrence` (optional)
@@ -373,9 +374,13 @@ Response fields:
 - `stdout`, `stderr`, `error`
 - `applied_files`
 - `format_issues`, `lint_issues`
-- `build_status` (`not_run`, `passed`, `failed`)
+- `quality_checks_status` (`not_run`, `passed`, `failed`) — format/lint outcome, **independent of** `build_status`
+- `quality_checks_mode` (`pre_commit` or `language`) — present when checks ran: host pre-commit vs Docker language fallback
+- `build_status` (`not_run`, `passed`, `failed`) — optional **compile/build** step only (`build_language`)
 
 Quality/build semantics:
+- Docker images for language checks/builds are **pulled only when missing** locally (not on every request).
+- Python syntax check uses `py_compile` on **changed files** when they are `.py`; otherwise `compileall` on the sparse workspace.
 - If `.pre-commit-config.yaml` exists in workspace, pre-commit is preferred.
 - If unavailable, language-specific fallback checks can run.
 - If `build_language` is provided, language build validation is executed.

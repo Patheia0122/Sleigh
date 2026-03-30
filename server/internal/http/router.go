@@ -31,6 +31,8 @@ type Router struct {
 const (
 	lowMemoryBlockThreshold   = 0.10
 	lowMemoryWarningThreshold = 0.15
+	// defaultCodeWriteTimeoutSeconds bounds copy + optional pre-commit + docker quality + build.
+	defaultCodeWriteTimeoutSeconds = 120
 )
 
 type healthResponse struct {
@@ -163,7 +165,11 @@ type codeWriteResponse struct {
 	AppliedFiles []string `json:"applied_files,omitempty"`
 	FormatIssues []string `json:"format_issues,omitempty"`
 	LintIssues   []string `json:"lint_issues,omitempty"`
-	BuildStatus  string   `json:"build_status,omitempty"`
+	// QualityChecksStatus is whether format/lint ran: not_run | passed | failed (independent of build_status).
+	QualityChecksStatus string `json:"quality_checks_status,omitempty"`
+	// QualityChecksMode is how checks ran when Status is passed/failed: pre_commit | language (Docker fallback).
+	QualityChecksMode string `json:"quality_checks_mode,omitempty"`
+	BuildStatus       string `json:"build_status,omitempty"`
 }
 
 type workflowRunRequest struct {
@@ -1148,7 +1154,8 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 
 	timeoutSeconds := body.TimeoutSeconds
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = 20
+		// Copy + docker quality/build can exceed 20s on first image pull or slow networks.
+		timeoutSeconds = defaultCodeWriteTimeoutSeconds
 	}
 	maxOutputBytes := body.MaxOutputBytes
 	if maxOutputBytes <= 0 {
@@ -1180,15 +1187,16 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		stdout, omittedOut, truncOut := applyOutputLimits(ensureOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(ensureOut.stderr, maxOutputBytes, maxLines)
 		writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
-			Status:       "error",
-			DurationMS:   time.Since(started).Milliseconds(),
-			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
-			Truncated:    truncOut || truncErr,
-			Stdout:       stdout,
-			Stderr:       stderr,
-			Error:        "ensure sandbox path failed",
-			BuildStatus:  "not_run",
-			OmittedBytes: omittedOut + omittedErr,
+			Status:              "error",
+			DurationMS:          time.Since(started).Milliseconds(),
+			TimedOut:            errors.Is(runCtx.Err(), context.DeadlineExceeded),
+			Truncated:           truncOut || truncErr,
+			Stdout:              stdout,
+			Stderr:              stderr,
+			Error:               "ensure sandbox path failed",
+			QualityChecksStatus: "not_run",
+			BuildStatus:         "not_run",
+			OmittedBytes:        omittedOut + omittedErr,
 		})
 		return
 	}
@@ -1197,15 +1205,16 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		stdout, omittedOut, truncOut := applyOutputLimits(copyOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(copyOut.stderr, maxOutputBytes, maxLines)
 		writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
-			Status:       "error",
-			DurationMS:   time.Since(started).Milliseconds(),
-			TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
-			Truncated:    truncOut || truncErr,
-			Stdout:       stdout,
-			Stderr:       stderr,
-			Error:        "copy sandbox sources to host failed",
-			BuildStatus:  "not_run",
-			OmittedBytes: omittedOut + omittedErr,
+			Status:              "error",
+			DurationMS:          time.Since(started).Milliseconds(),
+			TimedOut:            errors.Is(runCtx.Err(), context.DeadlineExceeded),
+			Truncated:           truncOut || truncErr,
+			Stdout:              stdout,
+			Stderr:              stderr,
+			Error:               "copy sandbox sources to host failed",
+			QualityChecksStatus: "not_run",
+			BuildStatus:         "not_run",
+			OmittedBytes:        omittedOut + omittedErr,
 		})
 		return
 	}
@@ -1228,15 +1237,16 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
 			stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
 			writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
-				Status:       "error",
-				DurationMS:   time.Since(started).Milliseconds(),
-				TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
-				Truncated:    truncOut || truncErr,
-				Stdout:       stdout,
-				Stderr:       stderr,
-				Error:        editErr.Error(),
-				BuildStatus:  "not_run",
-				OmittedBytes: omittedOut + omittedErr,
+				Status:              "error",
+				DurationMS:          time.Since(started).Milliseconds(),
+				TimedOut:            errors.Is(runCtx.Err(), context.DeadlineExceeded),
+				Truncated:           truncOut || truncErr,
+				Stdout:              stdout,
+				Stderr:              stderr,
+				Error:               editErr.Error(),
+				QualityChecksStatus: "not_run",
+				BuildStatus:         "not_run",
+				OmittedBytes:        omittedOut + omittedErr,
 			})
 			return
 		}
@@ -1246,11 +1256,12 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		targetFile, err = rewriteFileInWorkspace(cwd, sandboxFilePath, body.Content)
 		if err != nil {
 			writeJSON(w, stdhttp.StatusOK, codeWriteResponse{
-				Status:      "error",
-				DurationMS:  time.Since(started).Milliseconds(),
-				TimedOut:    errors.Is(runCtx.Err(), context.DeadlineExceeded),
-				Error:       err.Error(),
-				BuildStatus: "not_run",
+				Status:              "error",
+				DurationMS:          time.Since(started).Milliseconds(),
+				TimedOut:            errors.Is(runCtx.Err(), context.DeadlineExceeded),
+				Error:               err.Error(),
+				QualityChecksStatus: "not_run",
+				BuildStatus:         "not_run",
 			})
 			return
 		}
@@ -1259,17 +1270,18 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	stdout, omittedOut, truncOut := applyOutputLimits(editOut.stdout, maxOutputBytes, maxLines)
 	stderr, omittedErr, truncErr := applyOutputLimits(editOut.stderr, maxOutputBytes, maxLines)
 	resp := codeWriteResponse{
-		Status:       "ok",
-		DurationMS:   time.Since(started).Milliseconds(),
-		TimedOut:     errors.Is(runCtx.Err(), context.DeadlineExceeded),
-		Truncated:    truncOut || truncErr,
-		Stdout:       stdout,
-		Stderr:       stderr,
-		AppliedFiles: appliedFiles,
-		FormatIssues: []string{},
-		LintIssues:   []string{},
-		BuildStatus:  "not_run",
-		OmittedBytes: omittedOut + omittedErr,
+		Status:              "ok",
+		DurationMS:          time.Since(started).Milliseconds(),
+		TimedOut:            errors.Is(runCtx.Err(), context.DeadlineExceeded),
+		Truncated:           truncOut || truncErr,
+		Stdout:              stdout,
+		Stderr:              stderr,
+		AppliedFiles:        appliedFiles,
+		FormatIssues:        []string{},
+		LintIssues:          []string{},
+		QualityChecksStatus: "not_run",
+		BuildStatus:         "not_run",
+		OmittedBytes:        omittedOut + omittedErr,
 	}
 	if editErr != nil {
 		resp.Status = "error"
@@ -1307,16 +1319,26 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 			resp.FormatIssues, resp.LintIssues = classifyPreCommitIssues(qualityOutput.stderr, qualityOutput.stdout, 30)
 			resp.Status = "error"
 			resp.Error = "pre-commit checks failed; fix issues and retry"
+			resp.QualityChecksStatus = "failed"
+			resp.QualityChecksMode = "pre_commit"
 			resp.BuildStatus = "not_run"
+		} else {
+			resp.QualityChecksStatus = "passed"
+			resp.QualityChecksMode = "pre_commit"
 		}
 	} else if detectedLanguage := detectWorkspaceLanguage(cwd, appliedFiles); detectedLanguage != "" {
-		qualityOutput, qualityErr = runLanguageQualityChecks(runCtx, cwd, detectedLanguage)
+		qualityOutput, qualityErr = runLanguageQualityChecks(runCtx, cwd, detectedLanguage, appliedFiles)
 		if qualityErr != nil {
 			resp.FormatIssues = []string{}
 			resp.LintIssues = []string{}
 			resp.Status = "error"
 			resp.Error = formatLanguageCheckError(detectedLanguage, qualityErr, runCtx.Err())
+			resp.QualityChecksStatus = "failed"
+			resp.QualityChecksMode = "language"
 			resp.BuildStatus = "not_run"
+		} else {
+			resp.QualityChecksStatus = "passed"
+			resp.QualityChecksMode = "language"
 		}
 	}
 
@@ -2384,18 +2406,17 @@ type qualityProfile struct {
 	command string
 }
 
-func resolveQualityProfile(language string) (qualityProfile, bool) {
+func resolveQualityProfile(language string, changedFiles []string) (qualityProfile, bool) {
 	switch strings.ToLower(strings.TrimSpace(language)) {
 	case "python", "py":
 		return qualityProfile{
 			image:   "python:3.12",
-			command: "python -m compileall -q .",
+			command: pythonQualityCommand(changedFiles),
 		}, true
 	case "go", "golang":
 		return qualityProfile{
-			image: "golang:1.26",
-			command: "gofmt_out=$(gofmt -l .); " +
-				"if [ -n \"$gofmt_out\" ]; then echo \"$gofmt_out\"; exit 1; fi",
+			image:   "golang:1.26",
+			command: goQualityCommand(changedFiles),
 		}, true
 	case "node", "javascript", "js", "typescript", "ts":
 		return qualityProfile{
@@ -2420,14 +2441,71 @@ func resolveQualityProfile(language string) (qualityProfile, bool) {
 	}
 }
 
-func runLanguageQualityChecks(ctx context.Context, cwd string, language string) (commandOutput, error) {
-	profile, ok := resolveQualityProfile(language)
+// pythonQualityCommand compiles only changed .py files when listed (sparse workspace);
+// otherwise falls back to compileall on the whole cwd.
+func pythonQualityCommand(changedFiles []string) string {
+	quoted := make([]string, 0, len(changedFiles))
+	for _, f := range changedFiles {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		f = filepath.Clean(strings.TrimPrefix(f, string(filepath.Separator)))
+		if f == "." || f == ".." || strings.HasPrefix(f, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if filepath.Ext(strings.ToLower(f)) != ".py" {
+			continue
+		}
+		quoted = append(quoted, shQuote(f))
+	}
+	if len(quoted) == 0 {
+		return "python -m compileall -q ."
+	}
+	return "python -m py_compile " + strings.Join(quoted, " ")
+}
+
+func goQualityCommand(changedFiles []string) string {
+	quoted := make([]string, 0, len(changedFiles))
+	for _, f := range changedFiles {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		f = filepath.Clean(strings.TrimPrefix(f, string(filepath.Separator)))
+		if f == "." || f == ".." || strings.HasPrefix(f, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if ext := strings.ToLower(filepath.Ext(f)); ext != ".go" {
+			continue
+		}
+		quoted = append(quoted, shQuote(f))
+	}
+	if len(quoted) == 0 {
+		return "gofmt_out=$(gofmt -l .); " +
+			"if [ -n \"$gofmt_out\" ]; then echo \"$gofmt_out\"; exit 1; fi"
+	}
+	return "gofmt_out=$(gofmt -l " + strings.Join(quoted, " ") + "); " +
+		"if [ -n \"$gofmt_out\" ]; then echo \"$gofmt_out\"; exit 1; fi"
+}
+
+// ensureDockerImageLocal pulls only when the image is missing, avoiding slow/network pull on every code_write.
+func ensureDockerImageLocal(ctx context.Context, image string) (commandOutput, error) {
+	inspectOut, err := runCommand(ctx, "", "docker", "image", "inspect", "--format", "{{.Id}}", image)
+	if err == nil && strings.TrimSpace(inspectOut.stdout) != "" {
+		return commandOutput{}, nil
+	}
+	return runCommand(ctx, "", "docker", "pull", image)
+}
+
+func runLanguageQualityChecks(ctx context.Context, cwd string, language string, changedFiles []string) (commandOutput, error) {
+	profile, ok := resolveQualityProfile(language, changedFiles)
 	if !ok {
 		return commandOutput{}, nil
 	}
-	pullOut, pullErr := runCommand(ctx, "", "docker", "pull", profile.image)
+	pullOut, pullErr := ensureDockerImageLocal(ctx, profile.image)
 	if pullErr != nil {
-		return pullOut, fmt.Errorf("docker pull failed for quality checks image %q: %w", profile.image, pullErr)
+		return pullOut, fmt.Errorf("docker image %q not available: %w", profile.image, pullErr)
 	}
 	runOut, runErr := runCommand(
 		ctx,
@@ -2544,9 +2622,9 @@ func runContainerBuild(ctx context.Context, cwd string, language string) (comman
 	if !ok {
 		return commandOutput{}, fmt.Errorf("unsupported build language: %s", language)
 	}
-	pullOut, pullErr := runCommand(ctx, "", "docker", "pull", profile.image)
+	pullOut, pullErr := ensureDockerImageLocal(ctx, profile.image)
 	if pullErr != nil {
-		return pullOut, fmt.Errorf("docker pull failed for build image %q: %w", profile.image, pullErr)
+		return pullOut, fmt.Errorf("docker image %q not available: %w", profile.image, pullErr)
 	}
 	buildOut, buildErr := runCommand(
 		ctx,

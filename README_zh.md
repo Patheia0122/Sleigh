@@ -74,6 +74,8 @@ cd Sleigh
 
 安装脚本会构建服务端并启动 `sleigh.service`。
 
+若编译阶段出现 `go: downloading ... proxy.golang.org ... i/o timeout`：多半是访问 **proxy.golang.org** 不畅。安装脚本在编译时会默认 **`GOPROXY=https://goproxy.cn,direct`**、**`GOSUMDB=sum.golang.google.cn`**，并 **优先使用 `/usr/local/go/bin/go`**（避免 PATH 里 conda 的旧 `go` 先被选中）。若本机只有旧版 Go 而 `go.mod` 要求更高版本，Go 会自动下载匹配的 **toolchain**（同样走 `GOPROXY`）；若你已手动安装满足版本的 Go，可自行 `export GOTOOLCHAIN=local` 禁止拉取 toolchain。
+
 ### 2）检查服务状态
 
 ```bash
@@ -213,7 +215,8 @@ tool = client.as_langchain_tool()
 
 ## 说明与限制
 
-- code_write 的 `build_language` 可选；若服务端缺少对应镜像，会先拉取，导致耗时增加。
+- code_write 的 `build_language` 可选；语言检查/构建所用 Docker 镜像**仅在本地不存在时拉取**（非每次请求都 pull）。默认 `timeout_seconds` 为 **120**；若仍遇首拉镜像或慢网络，可适当调大。
+- 响应中 `quality_checks_status` / `quality_checks_mode` 表示 **Format/Lint** 是否执行及方式（`pre_commit` 或 `language` 回退）；`build_status` 仅表示可选的**编译/构建**，二者独立。
 - 执行任务 webhook 回调使用 `WEBHOOK_HMAC_SECRET` 进行 HMAC 签名（`X-Timestamp`、`X-Signature`）。请求体为 `{"status":"ok|err|timeout","payload":{...}}`，其中 `payload` 含 `exec_id`、`sandbox_id`、`exec_status`、`command`、时间戳，以及可选的 `exit_code`、`error`。过长的 `command`、`error` 会按 Unicode 字符数截断并保留尾部。
 - 可在 `POST /sandboxes/{id}/exec` 请求体里直接传 `webhook_url` 一步完成订阅（无需先拿 `exec_id` 再调订阅接口），也可在 `exec` 返回后用 `POST /webhooks/exec/subscribe`。
 - 挂载模式设计为只读（`ro`）。

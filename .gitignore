@@ -34,6 +34,9 @@ server/data/
 # Local assistant change journal
 .local-change-log.md
 
+# Local one-off HTTP / integration test scripts (not versioned)
+scripts/test_code_write_payload.py
+
 # Local runtime test notes
 Agent真实调用测试_*.md
 待做_第七轮.md
