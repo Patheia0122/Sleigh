@@ -1200,7 +1200,9 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		})
 		return
 	}
-	copyOut, copyErr := copySandboxTreeForCodeWrite(runCtx, sandboxID, sandboxFilePath, sandboxDirPath, cwd)
+	copyOut, copyErr := copySandboxTreeForCodeWrite(
+		runCtx, sandboxID, sandboxFilePath, sandboxDirPath, cwd, writeMode == "replace_file",
+	)
 	if copyErr != nil {
 		stdout, omittedOut, truncOut := applyOutputLimits(copyOut.stdout, maxOutputBytes, maxLines)
 		stderr, omittedErr, truncErr := applyOutputLimits(copyOut.stderr, maxOutputBytes, maxLines)
@@ -2244,15 +2246,25 @@ var qualityWorkspaceConfigNames = []string{
 func copySandboxTreeForCodeWrite(
 	ctx context.Context,
 	sandboxID, sandboxFilePath, sandboxDirPath, cwd string,
+	allowMissingSandboxFile bool,
 ) (commandOutput, error) {
 	rel, err := filepath.Rel(sandboxDirPath, sandboxFilePath)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return commandOutput{}, fmt.Errorf("sandbox_path must be under parent directory")
 	}
 	hostTarget := filepath.Join(cwd, rel)
-	out, err := copySandboxFileToHost(ctx, sandboxID, sandboxFilePath, hostTarget)
-	if err != nil {
-		return out, err
+	var out commandOutput
+	if allowMissingSandboxFile && !dockerFileExists(ctx, sandboxID, sandboxFilePath) {
+		// replace_file can create a new path; docker cp requires the source file to exist.
+		if err := os.MkdirAll(filepath.Dir(hostTarget), 0o755); err != nil {
+			return commandOutput{}, err
+		}
+	} else {
+		var cpErr error
+		out, cpErr = copySandboxFileToHost(ctx, sandboxID, sandboxFilePath, hostTarget)
+		if cpErr != nil {
+			return out, cpErr
+		}
 	}
 	cfgOut := copyWorkspaceUpstreamConfigs(ctx, sandboxID, sandboxDirPath, cwd)
 	return combineCommandOutputs(out, cfgOut), nil

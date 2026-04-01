@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+import sys
 from typing import Annotated
 
+import anyio
 from pydantic import Field
 
 from .client import SleighClient
+
+if sys.version_info >= (3, 11):
+    _BaseExceptionGroup = BaseExceptionGroup
+else:
+    from exceptiongroup import BaseExceptionGroup as _BaseExceptionGroup
+
+
+def _is_stdio_client_disconnect(exc: BaseException) -> bool:
+    """True when MCP stdio transport shut down because the host closed stdin (expected)."""
+    if isinstance(exc, (anyio.BrokenResourceError, anyio.ClosedResourceError)):
+        return True
+    if isinstance(exc, _BaseExceptionGroup):
+        if not exc.exceptions:
+            return False
+        return all(_is_stdio_client_disconnect(e) for e in exc.exceptions)
+    return False
 
 
 def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
@@ -367,5 +385,16 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
 
 
 def run_stdio_server(base_url: str, timeout_seconds: float = 30.0):
+    """Run the MCP server on stdio until the client disconnects.
+
+    The upstream ``mcp`` stdio reader only catches ``ClosedResourceError``; when the
+    host closes the pipe, ``BrokenResourceError`` can surface as an ``ExceptionGroup``.
+    Treat that as a normal exit so the process does not log a traceback.
+    """
     mcp = build_mcp_server(base_url=base_url, timeout_seconds=timeout_seconds)
-    mcp.run()
+    try:
+        mcp.run()
+    except BaseException as exc:
+        if _is_stdio_client_disconnect(exc):
+            return
+        raise
