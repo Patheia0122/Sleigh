@@ -66,6 +66,8 @@ func main() {
 		CursorTokenSecret:             cfg.CursorTokenSecret,
 		CursorTokenTTLSeconds:         cfg.CursorTokenTTLSeconds,
 		SandboxIdleTTLDays:            cfg.SandboxIdleTTLDays,
+		SnapshotRetentionDays:         cfg.SnapshotRetentionDays,
+		PruneDanglingImages:           cfg.DockerImagePruneDangling,
 	}, tracer)
 	if _, err := service.RefillWarmPool(context.Background()); err != nil {
 		log.Printf("warm pool refill on startup failed: %v", err)
@@ -128,6 +130,23 @@ func main() {
 					"periodic image cleanup completed: scanned=%d deleted=%d",
 					result.Scanned,
 					result.Deleted,
+				)
+			},
+		)
+	}
+	if cfg.ExecCleanupIntervalSeconds > 0 {
+		service.StartSnapshotLifecycleLoop(
+			ctx,
+			time.Duration(cfg.ExecCleanupIntervalSeconds)*time.Second,
+			func(result sandbox.SnapshotLifecycleResult, err error) {
+				if err != nil {
+					log.Printf("snapshot lifecycle maintenance failed: %v", err)
+					return
+				}
+				log.Printf(
+					"snapshot lifecycle completed: expired_snapshots_deleted=%d dangling_prune=%v",
+					result.ExpiredSnapshotsDeleted,
+					result.DanglingImagePruneRan,
 				)
 			},
 		)

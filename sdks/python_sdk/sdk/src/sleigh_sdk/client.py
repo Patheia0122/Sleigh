@@ -329,10 +329,28 @@ class SleighClient:
             sandbox_id = step.get("sandbox_id")
             if sandbox_id is None or str(sandbox_id).strip() == "":
                 raise ValueError(f"steps[{idx}].sandbox_id is required")
+        total_wait_budget = 0
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            if str(step.get("action", "")).strip().lower() != "exec_command":
+                continue
+            wait = step.get("wait")
+            if wait is False:
+                continue
+            ws = step.get("wait_timeout_seconds")
+            if ws is None or int(ws) <= 0:
+                total_wait_budget += 10
+            else:
+                total_wait_budget += int(ws)
+        http_timeout = None
+        if total_wait_budget > 0:
+            http_timeout = max(self.timeout_seconds, float(total_wait_budget) + 15.0)
         return self._request(
             "POST",
             "/workflow/run",
             json_body={"session_token": session_token, "steps": steps},
+            timeout_seconds=http_timeout,
         )
 
     def read_sandbox(
@@ -364,7 +382,16 @@ class SleighClient:
             body["max_lines"] = max_lines
         if output_offset is not None:
             body["output_offset"] = output_offset
-        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/read", json_body=body)
+        server_wait = 10
+        if timeout_seconds is not None and timeout_seconds > 0:
+            server_wait = timeout_seconds
+        http_timeout = max(self.timeout_seconds, float(server_wait) + 5.0)
+        return self._request(
+            "POST",
+            f"/sandboxes/{sandbox_id}/ops/read",
+            json_body=body,
+            timeout_seconds=http_timeout,
+        )
 
     def code_write(
         self,
@@ -410,4 +437,13 @@ class SleighClient:
             body["max_output_bytes"] = max_output_bytes
         if max_lines is not None:
             body["max_lines"] = max_lines
-        return self._request("POST", f"/sandboxes/{sandbox_id}/ops/code/write", json_body=body)
+        server_wait = 120
+        if timeout_seconds is not None and timeout_seconds > 0:
+            server_wait = timeout_seconds
+        http_timeout = max(self.timeout_seconds, float(server_wait) + 5.0)
+        return self._request(
+            "POST",
+            f"/sandboxes/{sandbox_id}/ops/code/write",
+            json_body=body,
+            timeout_seconds=http_timeout,
+        )

@@ -215,6 +215,7 @@ tool = client.as_langchain_tool()
 
 ## 说明与限制
 
+- 快照默认保留 **14 天**（`SNAPSHOT_RETENTION_DAYS`，设为 `0` 表示不按 TTL 删库表与磁盘）；与执行记录清理共用 **`EXEC_CLEANUP_INTERVAL_SECONDS`** 周期。默认开启 **`DOCKER_IMAGE_PRUNE_DANGLING`**（`docker image prune -f`）清理 `<none>` 悬空镜像层。
 - code_write 的 `build_language` 可选；语言检查/构建所用 Docker 镜像**仅在本地不存在时拉取**（非每次请求都 pull）。默认 `timeout_seconds` 为 **120**；若仍遇首拉镜像或慢网络，可适当调大。
 - 响应中 `quality_checks_status` / `quality_checks_mode` 表示 **Format/Lint** 是否执行及方式（`pre_commit` 或 `language` 回退）；`build_status` 仅表示可选的**编译/构建**，二者独立。
 - 执行任务 webhook 回调使用 `WEBHOOK_HMAC_SECRET` 进行 HMAC 签名（`X-Timestamp`、`X-Signature`）。请求体为 `{"status":"ok|err|timeout","payload":{...}}`，其中 `payload` 含 `exec_id`、`sandbox_id`、`exec_status`、`command`、时间戳，以及可选的 `exit_code`、`error`。过长的 `command`、`error` 会按 Unicode 字符数截断并保留尾部。

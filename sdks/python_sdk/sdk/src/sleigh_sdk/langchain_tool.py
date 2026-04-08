@@ -63,7 +63,7 @@ class SleighToolInput(BaseModel):
     command: str | None = Field(None, description="Command to execute in sandbox.")
     wait: bool | None = Field(None, description="Wait for exec result synchronously.")
     wait_timeout_seconds: int | None = Field(
-        None, ge=1, le=300, description="Max seconds to wait when wait=true (default 10)."
+        None, ge=1, description="Max seconds to wait when wait=true (server default 10 if omitted)."
     )
     image: str = Field("python:3.11-slim", description="Container image when creating a sandbox.")
     workspace_path: str | None = Field(
@@ -99,8 +99,7 @@ class SleighToolInput(BaseModel):
     request_timeout_seconds: float | None = Field(
         None,
         ge=1,
-        le=3600,
-        description="Optional HTTP timeout override for create_sandbox/exec_command.",
+        description="Optional HTTP client timeout (seconds). If unset, long waits use wait_timeout_seconds + margin.",
     )
     session_id: str | None = Field(None, description="Session id for session history query.")
     limit: int = Field(20, ge=1, le=200, description="Pagination page size.")
@@ -116,7 +115,9 @@ class SleighToolInput(BaseModel):
     read_command: str | None = Field(None, description="Whitelisted sandbox read command.")
     read_args: list[str] | None = Field(None, description="Arguments for read command.")
     cwd: str | None = Field(None, description="Working directory for read command.")
-    timeout_seconds: int | None = Field(None, ge=1, le=300, description="Read operation timeout seconds.")
+    timeout_seconds: int | None = Field(
+        None, ge=1, description="Read/code_write op timeout seconds (server defaults apply if omitted)."
+    )
     max_output_bytes: int | None = Field(None, ge=1, le=1048576, description="Max captured bytes per stream.")
     max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
@@ -264,10 +265,11 @@ class SleighLangChainClient:
             )
         if action == "exec_command":
             request_timeout_seconds = data.request_timeout_seconds
-            if request_timeout_seconds is None:
-                wait_seconds = data.wait_timeout_seconds or 0
-                if wait_seconds > 0:
-                    request_timeout_seconds = max(self.client.timeout_seconds, float(wait_seconds+5))
+            if request_timeout_seconds is None and data.wait:
+                wait_seconds = 10
+                if data.wait_timeout_seconds is not None and data.wait_timeout_seconds > 0:
+                    wait_seconds = data.wait_timeout_seconds
+                request_timeout_seconds = max(self.client.timeout_seconds, float(wait_seconds) + 5.0)
             return self.client.exec_command(
                 session_token=token,
                 sandbox_id=_require(data.sandbox_id, "sandbox_id"),

@@ -306,6 +306,12 @@ func (b *Backend) DeleteImageIfUnused(ctx context.Context, image string) (bool, 
 	return true, "deleted", nil
 }
 
+// PruneDanglingImages removes untagged Docker images (REPOSITORY "<none>").
+func (b *Backend) PruneDanglingImages(ctx context.Context) error {
+	_, err := dockerJSON(ctx, "image", "prune", "-f")
+	return err
+}
+
 // PreExecAutoExpand is a no-op at the Docker layer; pre-exec automatic expansion is
 // implemented in sandbox.Service (label auto_expand_memory + pressure + policy).
 func (b *Backend) PreExecAutoExpand(ctx context.Context, sandboxID string) (sandbox.AutoExpandResult, error) {

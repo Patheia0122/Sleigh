@@ -592,6 +592,57 @@ ORDER BY created_at DESC
 	return snapshots, nil
 }
 
+// ListSnapshotsCreatedBefore returns snapshots with created_at strictly before beforeRFC3339 (RFC3339 string compare).
+func (s *Store) ListSnapshotsCreatedBefore(ctx context.Context, beforeRFC3339 string) ([]SnapshotRecord, error) {
+	const query = `
+SELECT id, sandbox_id, image_ref, snapshot_type, source_host_path, base_snapshot_id, created_at
+FROM snapshots
+WHERE created_at < ?
+ORDER BY created_at ASC
+`
+	rows, err := s.db.QueryContext(ctx, query, beforeRFC3339)
+	if err != nil {
+		return nil, fmt.Errorf("query snapshots before cutoff: %w", err)
+	}
+	defer rows.Close()
+	var out []SnapshotRecord
+	for rows.Next() {
+		var rec SnapshotRecord
+		if err := rows.Scan(
+			&rec.ID,
+			&rec.SandboxID,
+			&rec.ImageRef,
+			&rec.Type,
+			&rec.HostPath,
+			&rec.BaseID,
+			&rec.Created,
+		); err != nil {
+			return nil, fmt.Errorf("scan snapshot: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshots before cutoff: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteSnapshotByID(ctx context.Context, snapshotID string) error {
+	const query = `DELETE FROM snapshots WHERE id = ?`
+	res, err := s.db.ExecContext(ctx, query, snapshotID)
+	if err != nil {
+		return fmt.Errorf("delete snapshot: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete snapshot rows: %w", err)
+	}
+	if n == 0 {
+		return appErr.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) GetSnapshot(ctx context.Context, sandboxID, snapshotID string) (SnapshotRecord, error) {
 	const query = `
 SELECT id, sandbox_id, image_ref, snapshot_type, source_host_path, base_snapshot_id, created_at

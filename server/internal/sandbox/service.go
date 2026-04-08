@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"net/http"
 	neturl "net/url"
@@ -65,6 +66,11 @@ type Policy struct {
 	WebhookHMACSecret             string
 	CursorTokenTTLSeconds         int
 	SandboxIdleTTLDays            int
+	// SnapshotRetentionDays deletes snapshot records and storage (Docker image or workspace dir)
+	// after this many days. 0 disables TTL deletion.
+	SnapshotRetentionDays int
+	// PruneDanglingImages runs docker image prune -f on the same maintenance interval.
+	PruneDanglingImages bool
 }
 
 type ExecRequest struct {
@@ -74,7 +80,7 @@ type ExecRequest struct {
 type ExecResult struct {
 	ID          string `json:"id"`
 	SandboxID   string `json:"sandbox_id"`
-	Command     string `json:"command"`
+	Command     string `json:"-"` // stored server-side; omitted from HTTP JSON to shrink agent-facing payloads
 	Status      string `json:"status"`
 	Stdout      string `json:"stdout,omitempty"`
 	Stderr      string `json:"stderr,omitempty"`
@@ -103,6 +109,12 @@ type IdleCleanupResult struct {
 type ImageCleanupResult struct {
 	Scanned int64 `json:"scanned"`
 	Deleted int64 `json:"deleted"`
+}
+
+// SnapshotLifecycleResult reports periodic snapshot TTL and Docker dangling-image maintenance.
+type SnapshotLifecycleResult struct {
+	ExpiredSnapshotsDeleted int64 `json:"expired_snapshots_deleted"`
+	DanglingImagePruneRan   bool  `json:"dangling_image_prune_ran"`
 }
 
 type MountRequest struct {
@@ -1860,6 +1872,115 @@ func (s *Service) StartImageCleanupLoop(
 			cancel()
 			if hook != nil {
 				hook(result, err)
+			}
+		}
+	}()
+}
+
+// CleanupSnapshotLifecycle removes snapshot records older than SnapshotRetentionDays (workspace dirs
+// and committed Docker images when safe) and optionally runs docker image prune -f for dangling layers.
+func (s *Service) CleanupSnapshotLifecycle(ctx context.Context) (SnapshotLifecycleResult, error) {
+	var r SnapshotLifecycleResult
+	if s.backend == nil || s.store == nil {
+		return r, fmt.Errorf("sandbox service not initialized")
+	}
+	if s.policy.SnapshotRetentionDays > 0 {
+		cutoff := time.Now().UTC().Add(-time.Duration(s.policy.SnapshotRetentionDays) * 24 * time.Hour).Format(time.RFC3339)
+		rows, err := s.store.ListSnapshotsCreatedBefore(ctx, cutoff)
+		if err != nil {
+			return r, err
+		}
+		for _, row := range rows {
+			if err := s.cleanupOneExpiredSnapshot(ctx, row); err != nil {
+				log.Printf("snapshot lifecycle: skip %s: %v", row.ID, err)
+				continue
+			}
+			r.ExpiredSnapshotsDeleted++
+		}
+	}
+	if s.policy.PruneDanglingImages {
+		r.DanglingImagePruneRan = true
+		if err := s.backend.PruneDanglingImages(ctx); err != nil {
+			return r, fmt.Errorf("docker dangling image prune: %w", err)
+		}
+	}
+	return r, nil
+}
+
+func (s *Service) cleanupOneExpiredSnapshot(ctx context.Context, row sqlitestore.SnapshotRecord) error {
+	st := strings.TrimSpace(row.Type)
+	if st == "" {
+		st = "container"
+	}
+	if rec, err := s.store.GetSandbox(ctx, row.SandboxID); err == nil {
+		if strings.TrimSpace(rec.Image) == strings.TrimSpace(row.ImageRef) {
+			return fmt.Errorf("snapshot image still in use by sandbox")
+		}
+	} else if !errors.Is(err, appErr.ErrNotFound) {
+		return err
+	}
+
+	switch st {
+	case "workspace":
+		if strings.TrimSpace(s.policy.SnapshotRootDir) == "" {
+			return fmt.Errorf("snapshot root dir unset")
+		}
+		dir := snapshotDir(s.policy.SnapshotRootDir, row.SandboxID, row.ID)
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove workspace snapshot dir: %w", err)
+		}
+	default:
+		deleted, reason, err := s.backend.DeleteImageIfUnused(ctx, row.ImageRef)
+		if err != nil {
+			return err
+		}
+		if !deleted && reason == "referenced_by_container" {
+			return fmt.Errorf("snapshot image still referenced by a container")
+		}
+	}
+
+	if err := s.store.DeleteSnapshotByID(ctx, row.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) StartSnapshotLifecycleLoop(
+	ctx context.Context,
+	interval time.Duration,
+	hook func(SnapshotLifecycleResult, error),
+) {
+	if interval <= 0 {
+		return
+	}
+	if s.policy.SnapshotRetentionDays <= 0 && !s.policy.PruneDanglingImages {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		run := func() {
+			runCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			result, err := s.CleanupSnapshotLifecycle(runCtx)
+			if hook != nil {
+				hook(result, err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			run()
+		}
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
 			}
 		}
 	}()

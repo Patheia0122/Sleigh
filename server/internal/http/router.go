@@ -1989,29 +1989,34 @@ func truncateLines(content string, maxLines int) (string, bool) {
 	return strings.Join(lines[:maxLines], "\n"), true
 }
 
-const maxExecOutputTailLines = 100
+// maxExecOutputRunes is how many Unicode code points of stdout/stderr tail are kept when truncating exec API responses.
+const maxExecOutputRunes = 1000
 
-func truncateTailLinesWithNotice(content string, maxLines int, streamLabel string) (string, bool) {
-	if maxLines <= 0 || content == "" {
+func truncateTailRunesWithNotice(content string, maxTailRunes int, streamLabel string) (string, bool) {
+	if maxTailRunes <= 0 {
+		return "", content != ""
+	}
+	if content == "" {
+		return "", false
+	}
+	runes := []rune(content)
+	if len(runes) <= maxTailRunes {
 		return content, false
 	}
-	lines := strings.Split(content, "\n")
-	if len(lines) <= maxLines {
-		return content, false
-	}
-	omitted := len(lines) - maxLines
-	tail := strings.Join(lines[omitted:], "\n")
-	prefix := fmt.Sprintf("...(truncated %s: omitted %d lines, showing last %d lines)\n", streamLabel, omitted, maxLines)
+	omitted := len(runes) - maxTailRunes
+	tail := string(runes[len(runes)-maxTailRunes:])
+	prefix := fmt.Sprintf(
+		"...(truncated %s: omitted %d runes, showing last %d)\n",
+		streamLabel,
+		omitted,
+		maxTailRunes,
+	)
 	return prefix + tail, true
 }
 
 func clampExecResultOutput(result sandbox.ExecResult) sandbox.ExecResult {
-	stdout, stdoutCut := truncateTailLinesWithNotice(result.Stdout, maxExecOutputTailLines, "stdout")
-	stderr, stderrCut := truncateTailLinesWithNotice(result.Stderr, maxExecOutputTailLines, "stderr")
-	if stdoutCut || stderrCut {
-		result.Stdout = stdout
-		result.Stderr = stderr
-	}
+	result.Stdout, _ = truncateTailRunesWithNotice(result.Stdout, maxExecOutputRunes, "stdout")
+	result.Stderr, _ = truncateTailRunesWithNotice(result.Stderr, maxExecOutputRunes, "stderr")
 	return result
 }
 

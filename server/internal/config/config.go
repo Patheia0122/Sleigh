@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,7 @@ const (
 	defaultExecCleanupIntervalSeconds       = 3600
 	defaultImagePullTimeoutSeconds          = 120
 	defaultSandboxIdleTTLDays               = 14
+	defaultSnapshotRetentionDays            = 14
 	defaultMountAllowedRoot                 = "/opt/sleigh-runtime/mount-root-default"
 	defaultEnvironmentAllowedRoot           = "/opt/sleigh-runtime/environment-root-default"
 	defaultOTELEndpoint                     = ""
@@ -58,6 +60,8 @@ type Config struct {
 	ExecCleanupIntervalSeconds    int
 	MountAllowedRoot              string
 	EnvironmentAllowedRoot        string
+	SnapshotRetentionDays         int
+	DockerImagePruneDangling      bool
 }
 
 func FromEnv() Config {
@@ -86,9 +90,27 @@ func FromEnv() Config {
 		ExecCleanupIntervalSeconds:    getEnvInt("EXEC_CLEANUP_INTERVAL_SECONDS", defaultExecCleanupIntervalSeconds),
 		MountAllowedRoot:              getEnv("SERVER_MOUNT_ALLOWED_ROOT", defaultMountAllowedRoot),
 		EnvironmentAllowedRoot:        getEnv("SERVER_ENV_ALLOWED_ROOT", defaultEnvironmentAllowedRoot),
+		SnapshotRetentionDays:         getEnvInt("SNAPSHOT_RETENTION_DAYS", defaultSnapshotRetentionDays),
+		DockerImagePruneDangling:      getEnvBool("DOCKER_IMAGE_PRUNE_DANGLING", true),
 	}
 
 	return cfg
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	lower := strings.ToLower(value)
+	switch lower {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }
 
 func getEnv(key, fallback string) string {
