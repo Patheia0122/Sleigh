@@ -1990,7 +1990,7 @@ func truncateLines(content string, maxLines int) (string, bool) {
 }
 
 // maxExecOutputRunes is how many Unicode code points of stdout/stderr tail are kept when truncating exec API responses.
-const maxExecOutputRunes = 1000
+const maxExecOutputRunes = 3000
 
 func truncateTailRunesWithNotice(content string, maxTailRunes int, streamLabel string) (string, bool) {
 	if maxTailRunes <= 0 {

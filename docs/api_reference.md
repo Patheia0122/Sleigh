@@ -210,7 +210,7 @@ Behavior:
 Response may include:
 - `webhook_subscription`: `{ "created", "duplicate_ignored", "delivered_immediately", "exec_status" }` or `{ "error": "..." }` if subscription failed (the exec task still runs).
 
-Exec JSON responses (`wait=true`, `GET …/exec/{execId}`, and each item in `GET …/exec-tasks`) **omit `command`** (it is still stored server-side). They cap **`stdout` and `stderr`**: when truncated, each field starts with `...(truncated <stream>: omitted N runes, showing last 1000)`, then the **last 1000 Unicode code points** of that stream. Full output remains stored for the task; use a file in the sandbox or other patterns if you need unbounded capture.
+Exec JSON responses (`wait=true`, `GET …/exec/{execId}`, and each item in `GET …/exec-tasks`) **omit `command`** (it is still stored server-side). They cap **`stdout` and `stderr`**: when truncated, each field starts with `...(truncated <stream>: omitted N runes, showing last 3000)`, then the **last 3000 Unicode code points** of that stream. Full output remains stored for the task; use a file in the sandbox or other patterns if you need unbounded capture.
 
 ### 13) `GET /sandboxes/{id}/exec/{execId}`
 
