@@ -114,7 +114,7 @@ class SleighToolInput(BaseModel):
     )
     read_command: str | None = Field(None, description="Whitelisted sandbox read command.")
     read_args: list[str] | str | None = Field(
-        None, description="Arguments for read command. Passed through as-is to server."
+        None, description="Arguments for read command. SDK auto-normalizes string input to list[str]."
     )
     cwd: str | None = Field(None, description="Working directory for read command.")
     timeout_seconds: int | None = Field(

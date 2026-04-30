@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
@@ -371,7 +372,7 @@ class SleighClient:
             "command": command,
         }
         if args is not None:
-            body["args"] = args
+            body["args"] = _normalize_read_args(args)
         if cwd is not None:
             body["cwd"] = cwd
         if timeout_seconds is not None:
@@ -392,7 +393,6 @@ class SleighClient:
             json_body=body,
             timeout_seconds=http_timeout,
         )
-
     def code_write(
         self,
         *,
@@ -447,3 +447,23 @@ class SleighClient:
             json_body=body,
             timeout_seconds=http_timeout,
         )
+
+
+def _normalize_read_args(args: list[str] | str | None) -> list[str] | None:
+    if args is None:
+        return None
+    if isinstance(args, (list, tuple)):
+        return [str(item) for item in args]
+    if isinstance(args, str):
+        raw = args.strip()
+        if raw == "":
+            return []
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(item) for item in parsed]
+        return [raw]
+    return [str(args)]
