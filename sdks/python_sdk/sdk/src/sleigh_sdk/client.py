@@ -359,7 +359,7 @@ class SleighClient:
         session_token: str,
         sandbox_id: str,
         command: str,
-        args: list[str] | None = None,
+        args: list[str] | str | None = None,
         cwd: str | None = None,
         timeout_seconds: int | None = None,
         max_output_bytes: int | None = None,
