@@ -2427,7 +2427,7 @@ func resolveQualityProfile(language string, changedFiles []string) (qualityProfi
 	switch strings.ToLower(strings.TrimSpace(language)) {
 	case "python", "py":
 		return qualityProfile{
-			image:   "python:3.12",
+			image:   "python:3.11-slim",
 			command: pythonQualityCommand(changedFiles),
 		}, true
 	case "go", "golang":
