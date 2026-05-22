@@ -407,6 +407,8 @@ class SleighClient:
         write_mode: str | None = None,
         content: str | None = None,
         build_language: str | None = None,
+        post_exec_command: str | None = None,
+        post_exec_wait_timeout_seconds: int | None = None,
         timeout_seconds: int | None = None,
         max_output_bytes: int | None = None,
         max_lines: int | None = None,
@@ -431,6 +433,10 @@ class SleighClient:
             body["content"] = content
         if build_language is not None:
             body["build_language"] = build_language
+        if post_exec_command is not None:
+            body["post_exec_command"] = post_exec_command
+        if post_exec_wait_timeout_seconds is not None:
+            body["post_exec_wait_timeout_seconds"] = post_exec_wait_timeout_seconds
         if timeout_seconds is not None:
             body["timeout_seconds"] = timeout_seconds
         if max_output_bytes is not None:

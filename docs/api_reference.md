@@ -363,6 +363,8 @@ Request body:
   - `sandbox_path` (required absolute sandbox file path)
   - `write_mode` (`context_edit` default, or `replace_file`)
   - `build_language` (optional: `go`, `python`, `node`, `rust`, `java`, ...)
+  - `post_exec_command` (optional: shell command to run in sandbox **after** a successful write; **sync-waits**, default wait timeout **10s** via `post_exec_wait_timeout_seconds`)
+  - `post_exec_wait_timeout_seconds` (optional; used only with `post_exec_command`)
   - `timeout_seconds` (optional; default **120** — copy + pre-commit + Docker quality/build can exceed short deadlines; first-time image pull is slower)
   - `max_output_bytes`, `max_lines` (optional)
 - `context_edit` mode:
@@ -380,7 +382,11 @@ Response fields:
 - `quality_checks_mode` (`pre_commit` or `language`) — present when checks ran: host pre-commit vs Docker language fallback
 - `build_status` (`not_run`, `passed`, `failed`) — optional **compile/build** step only (`build_language`)
 
-Quality/build semantics:
+Post-exec semantics (`post_exec_command` set):
+- Skips pre-commit / language quality checks and `build_language` build validation.
+- Response body matches **`POST /sandboxes/{id}/exec`** with `wait=true` (`id`, `sandbox_id`, `status`, `stdout`, `stderr`, `exit_code`, `error`, timestamps, etc.).
+
+Quality/build semantics (when `post_exec_command` is omitted):
 - Docker images for language checks/builds are **pulled only when missing** locally (not on every request).
 - Python syntax check uses `py_compile` on **changed files** when they are `.py`; otherwise `compileall` on the sparse workspace.
 - If `.pre-commit-config.yaml` exists in workspace, pre-commit is preferred.

@@ -351,9 +351,23 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             Field(
                 description=(
                     "Optional build language: go/python/node/rust/java. "
-                    "If required image is missing, server may pull image first and latency can increase."
+                    "If required image is missing, server may pull image first and latency can increase. "
+                    "Ignored when post_exec_command is set."
                 )
             ),
+        ] = None,
+        post_exec_command: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Optional command to run in sandbox after successful write (sync wait). "
+                    "Skips quality/build checks; response matches exec_command."
+                )
+            ),
+        ] = None,
+        post_exec_wait_timeout_seconds: Annotated[
+            int | None,
+            Field(description="Max seconds to wait for post_exec_command (default 10)."),
         ] = None,
         timeout_seconds: Annotated[int | None, Field(description="Overall code_write timeout in seconds.")] = None,
         max_output_bytes: Annotated[int | None, Field(description="Max captured bytes for stdout/stderr.")] = None,
@@ -362,7 +376,7 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
         """Apply code changes in sandbox file via context_edit or replace_file modes.
 
         Optional build_language may trigger image pull when image is missing,
-        which can increase request latency.
+        which can increase request latency. post_exec_command skips quality/build and returns exec result.
         """
         return client.code_write(
             session_token=session_token,
@@ -376,6 +390,8 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             write_mode=write_mode,
             content=content,
             build_language=build_language,
+            post_exec_command=post_exec_command,
+            post_exec_wait_timeout_seconds=post_exec_wait_timeout_seconds,
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
             max_lines=max_lines,

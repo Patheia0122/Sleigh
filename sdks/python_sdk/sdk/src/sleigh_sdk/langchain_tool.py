@@ -165,7 +165,20 @@ class SleighToolInput(BaseModel):
     )
     build_language: str | None = Field(
         None,
-        description="Optional build language for code_write (e.g. go/python/node/rust/java).",
+        description="Optional build language for code_write (e.g. go/python/node/rust/java). Ignored when post_exec_command is set.",
+    )
+    post_exec_command: str | None = Field(
+        None,
+        description=(
+            "For code_write*: shell command to run in sandbox after a successful write. "
+            "Sync-waits for completion (default wait timeout 10s). "
+            "Skips quality/build checks; response shape matches exec_command."
+        ),
+    )
+    post_exec_wait_timeout_seconds: int | None = Field(
+        None,
+        ge=1,
+        description="Max seconds to wait for post_exec_command when sync-waiting (default 10).",
     )
 
     @model_validator(mode="after")
@@ -379,6 +392,8 @@ class SleighLangChainClient:
                 write_mode=mode,
                 content=data.content,
                 build_language=data.build_language,
+                post_exec_command=data.post_exec_command,
+                post_exec_wait_timeout_seconds=data.post_exec_wait_timeout_seconds,
                 timeout_seconds=data.timeout_seconds,
                 max_output_bytes=data.max_output_bytes,
                 max_lines=data.max_lines,
@@ -409,7 +424,8 @@ class SleighLangChainClient:
                 "For run_workflow, every step must include sandbox_id. "
                 "For code_write, default mode is context_edit; "
                 "prefer action=code_write_context_edit (sandbox_path+old_text+new_text) "
-                "or action=code_write_replace_file (sandbox_path+content) to avoid parameter ambiguity."
+                "or action=code_write_replace_file (sandbox_path+content) to avoid parameter ambiguity. "
+                "Use post_exec_command to run a sandbox command after write (sync wait); skips quality/build and returns exec result."
             )
 
         def runtime_tool(**kwargs) -> str:

@@ -138,19 +138,22 @@ type readOpResponse struct {
 }
 
 type codeWriteRequest struct {
-	SessionToken   string `json:"session_token"`
-	SandboxPath    string `json:"sandbox_path"`
-	WriteMode      string `json:"write_mode,omitempty"`
-	BeforeContext  string `json:"before_context,omitempty"`
-	OldText        string `json:"old_text,omitempty"`
-	NewText        string `json:"new_text,omitempty"`
-	AfterContext   string `json:"after_context,omitempty"`
-	Occurrence     int    `json:"occurrence,omitempty"`
-	Content        string `json:"content,omitempty"`
-	BuildLanguage  string `json:"build_language,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
-	MaxOutputBytes int    `json:"max_output_bytes,omitempty"`
-	MaxLines       int    `json:"max_lines,omitempty"`
+	SessionToken  string `json:"session_token"`
+	SandboxPath   string `json:"sandbox_path"`
+	WriteMode     string `json:"write_mode,omitempty"`
+	BeforeContext string `json:"before_context,omitempty"`
+	OldText       string `json:"old_text,omitempty"`
+	NewText       string `json:"new_text,omitempty"`
+	AfterContext  string `json:"after_context,omitempty"`
+	Occurrence    int    `json:"occurrence,omitempty"`
+	Content       string `json:"content,omitempty"`
+	BuildLanguage string `json:"build_language,omitempty"`
+	// PostExecCommand runs in sandbox after a successful write (sync wait). Skips quality/build checks.
+	PostExecCommand            string `json:"post_exec_command,omitempty"`
+	PostExecWaitTimeoutSeconds int    `json:"post_exec_wait_timeout_seconds,omitempty"`
+	TimeoutSeconds             int    `json:"timeout_seconds,omitempty"`
+	MaxOutputBytes             int    `json:"max_output_bytes,omitempty"`
+	MaxLines                   int    `json:"max_lines,omitempty"`
 }
 
 type codeWriteResponse struct {
@@ -1310,6 +1313,35 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 		resp.Truncated = truncOut || truncErr
 		resp.OmittedBytes = omittedOut + omittedErr
 		writeJSON(w, stdhttp.StatusOK, resp)
+		return
+	}
+
+	postExecCmd := strings.TrimSpace(body.PostExecCommand)
+	if postExecCmd != "" {
+		waitSeconds := body.PostExecWaitTimeoutSeconds
+		if waitSeconds <= 0 {
+			waitSeconds = 10
+		}
+		execResult, execErr := r.service.Execute(runCtx, sandboxID, sandbox.ExecRequest{Command: postExecCmd})
+		if execErr != nil {
+			writeDomainError(w, execErr)
+			return
+		}
+		execResult = clampExecResultOutput(execResult)
+		current, timedOut, waitErr := r.waitExecResult(runCtx, sandboxID, execResult, waitSeconds)
+		if waitErr != nil {
+			writeDomainError(w, waitErr)
+			return
+		}
+		if timedOut {
+			current.Error = fmt.Sprintf(
+				"still running after wait timeout (%ds); call get_exec with exec_id=%s to continue polling",
+				waitSeconds,
+				current.ID,
+			)
+		}
+		current = clampExecResultOutput(current)
+		writeJSON(w, stdhttp.StatusOK, execWithWebhookResponse{ExecResult: current})
 		return
 	}
 
