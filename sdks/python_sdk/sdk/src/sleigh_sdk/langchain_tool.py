@@ -171,14 +171,18 @@ class SleighToolInput(BaseModel):
         None,
         description=(
             "For code_write*: shell command to run in sandbox after a successful write. "
-            "Sync-waits for completion (default wait timeout 10s). "
-            "Skips quality/build checks; response shape matches exec_command."
+            "Skips quality/build checks; response shape matches exec_command. "
+            "Omit post_exec_wait_timeout_seconds to start exec async (returns exec_id immediately); "
+            "set post_exec_wait_timeout_seconds to sync-wait for completion."
         ),
     )
     post_exec_wait_timeout_seconds: int | None = Field(
         None,
         ge=1,
-        description="Max seconds to wait for post_exec_command when sync-waiting (default 10).",
+        description=(
+            "When set with post_exec_command: sync-wait up to this many seconds (server default 10 if <= 0). "
+            "When omitted: post_exec_command runs async (no wait)."
+        ),
     )
 
     @model_validator(mode="after")
@@ -425,7 +429,9 @@ class SleighLangChainClient:
                 "For code_write, default mode is context_edit; "
                 "prefer action=code_write_context_edit (sandbox_path+old_text+new_text) "
                 "or action=code_write_replace_file (sandbox_path+content) to avoid parameter ambiguity. "
-                "Use post_exec_command to run a sandbox command after write (sync wait); skips quality/build and returns exec result."
+                "Use post_exec_command to run a sandbox command after write; "
+                "omit post_exec_wait_timeout_seconds for async exec, or set it to sync-wait. "
+                "Skips quality/build and returns exec result."
             )
 
         def runtime_tool(**kwargs) -> str:

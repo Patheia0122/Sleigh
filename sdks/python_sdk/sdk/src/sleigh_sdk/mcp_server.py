@@ -360,14 +360,20 @@ def build_mcp_server(base_url: str, timeout_seconds: float = 30.0):
             str | None,
             Field(
                 description=(
-                    "Optional command to run in sandbox after successful write (sync wait). "
-                    "Skips quality/build checks; response matches exec_command."
+                    "Optional command to run in sandbox after successful write. "
+                    "Skips quality/build checks; response matches exec_command. "
+                    "Omit post_exec_wait_timeout_seconds for async; set it to sync-wait."
                 )
             ),
         ] = None,
         post_exec_wait_timeout_seconds: Annotated[
             int | None,
-            Field(description="Max seconds to wait for post_exec_command (default 10)."),
+            Field(
+                description=(
+                    "When set: sync-wait up to this many seconds for post_exec_command (default 10 if <= 0). "
+                    "When omitted: post_exec runs async."
+                )
+            ),
         ] = None,
         timeout_seconds: Annotated[int | None, Field(description="Overall code_write timeout in seconds.")] = None,
         max_output_bytes: Annotated[int | None, Field(description="Max captured bytes for stdout/stderr.")] = None,

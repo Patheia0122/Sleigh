@@ -363,8 +363,8 @@ Request body:
   - `sandbox_path` (required absolute sandbox file path)
   - `write_mode` (`context_edit` default, or `replace_file`)
   - `build_language` (optional: `go`, `python`, `node`, `rust`, `java`, ...)
-  - `post_exec_command` (optional: shell command to run in sandbox **after** a successful write; **sync-waits**, default wait timeout **10s** via `post_exec_wait_timeout_seconds`)
-  - `post_exec_wait_timeout_seconds` (optional; used only with `post_exec_command`)
+  - `post_exec_command` (optional: shell command to run in sandbox **after** a successful write)
+  - `post_exec_wait_timeout_seconds` (optional; used only with `post_exec_command` — **omit** to start exec **async** and return immediately with `exec_id`; **set** to sync-wait up to that many seconds, default **10** when value is `<= 0`)
   - `timeout_seconds` (optional; default **120** — copy + pre-commit + Docker quality/build can exceed short deadlines; first-time image pull is slower)
   - `max_output_bytes`, `max_lines` (optional)
 - `context_edit` mode:
@@ -384,7 +384,8 @@ Response fields:
 
 Post-exec semantics (`post_exec_command` set):
 - Skips pre-commit / language quality checks and `build_language` build validation.
-- Response body matches **`POST /sandboxes/{id}/exec`** with `wait=true` (`id`, `sandbox_id`, `status`, `stdout`, `stderr`, `exit_code`, `error`, timestamps, etc.).
+- **`post_exec_wait_timeout_seconds` omitted**: response matches **`POST /sandboxes/{id}/exec`** with `wait=false` — HTTP **202**, exec started (`id`, `sandbox_id`, `status`, …); poll **`GET /sandboxes/{id}/exec/{execId}`** or use sandbox reads when finished.
+- **`post_exec_wait_timeout_seconds` set**: response matches **`POST /sandboxes/{id}/exec`** with `wait=true` — HTTP **200**, sync-wait up to the given seconds (`stdout`, `stderr`, `exit_code`, …).
 
 Quality/build semantics (when `post_exec_command` is omitted):
 - Docker images for language checks/builds are **pulled only when missing** locally (not on every request).

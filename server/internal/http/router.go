@@ -148,9 +148,10 @@ type codeWriteRequest struct {
 	Occurrence    int    `json:"occurrence,omitempty"`
 	Content       string `json:"content,omitempty"`
 	BuildLanguage string `json:"build_language,omitempty"`
-	// PostExecCommand runs in sandbox after a successful write (sync wait). Skips quality/build checks.
+	// PostExecCommand runs in sandbox after a successful write. Skips quality/build checks.
+	// When PostExecWaitTimeoutSeconds is set, sync-waits up to that many seconds; when omitted, returns after exec starts (async).
 	PostExecCommand            string `json:"post_exec_command,omitempty"`
-	PostExecWaitTimeoutSeconds int    `json:"post_exec_wait_timeout_seconds,omitempty"`
+	PostExecWaitTimeoutSeconds *int   `json:"post_exec_wait_timeout_seconds,omitempty"`
 	TimeoutSeconds             int    `json:"timeout_seconds,omitempty"`
 	MaxOutputBytes             int    `json:"max_output_bytes,omitempty"`
 	MaxLines                   int    `json:"max_lines,omitempty"`
@@ -1318,16 +1319,20 @@ func (r *Router) codeWrite(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 
 	postExecCmd := strings.TrimSpace(body.PostExecCommand)
 	if postExecCmd != "" {
-		waitSeconds := body.PostExecWaitTimeoutSeconds
-		if waitSeconds <= 0 {
-			waitSeconds = 10
-		}
 		execResult, execErr := r.service.Execute(runCtx, sandboxID, sandbox.ExecRequest{Command: postExecCmd})
 		if execErr != nil {
 			writeDomainError(w, execErr)
 			return
 		}
 		execResult = clampExecResultOutput(execResult)
+		if body.PostExecWaitTimeoutSeconds == nil {
+			writeJSON(w, stdhttp.StatusAccepted, execWithWebhookResponse{ExecResult: execResult})
+			return
+		}
+		waitSeconds := *body.PostExecWaitTimeoutSeconds
+		if waitSeconds <= 0 {
+			waitSeconds = 10
+		}
 		current, timedOut, waitErr := r.waitExecResult(runCtx, sandboxID, execResult, waitSeconds)
 		if waitErr != nil {
 			writeDomainError(w, waitErr)
