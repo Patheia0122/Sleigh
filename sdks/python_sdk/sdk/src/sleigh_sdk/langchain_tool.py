@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, model_validator
 from .client import SleighClient
 
 _MAX_TOOL_RESPONSE_CHARS = 12000
+# read_sandbox JSON envelope (e.g. full slim.xml ~60–80KiB in stdout + metadata).
+_MAX_READ_TOOL_RESPONSE_CHARS = 280_000
 
 
 class SleighToolInput(BaseModel):
@@ -120,7 +122,12 @@ class SleighToolInput(BaseModel):
     timeout_seconds: int | None = Field(
         None, ge=1, description="Read/code_write op timeout seconds (server defaults apply if omitted)."
     )
-    max_output_bytes: int | None = Field(None, ge=1, le=1048576, description="Max captured bytes per stream.")
+    max_output_bytes: int | None = Field(
+        None,
+        ge=1,
+        le=2097152,
+        description="Max captured bytes per stream (read_sandbox server default 256KiB when omitted).",
+    )
     max_lines: int | None = Field(None, ge=1, le=5000, description="Max lines kept in stdout/stderr.")
     output_offset: int | None = Field(None, ge=0, description="Opaque output offset hint.")
     auto_expand: bool | None = Field(
@@ -438,7 +445,15 @@ class SleighLangChainClient:
             try:
                 payload = SleighToolInput(**kwargs)
                 result = self._dispatch(payload)
-                return _truncate_for_agent(json.dumps(result, ensure_ascii=False))
+                limit = (
+                    _MAX_READ_TOOL_RESPONSE_CHARS
+                    if payload.action == "read_sandbox"
+                    else _MAX_TOOL_RESPONSE_CHARS
+                )
+                return _truncate_for_agent(
+                    json.dumps(result, ensure_ascii=False),
+                    max_chars=limit,
+                )
             except Exception as exc:  # pragma: no cover
                 return f"sleigh sdk error: {exc}"
 
@@ -459,7 +474,7 @@ def _require(value, field_name: str):
     return value
 
 
-def _truncate_for_agent(text: str) -> str:
-    if len(text) <= _MAX_TOOL_RESPONSE_CHARS:
+def _truncate_for_agent(text: str, *, max_chars: int = _MAX_TOOL_RESPONSE_CHARS) -> str:
+    if len(text) <= max_chars:
         return text
-    return text[:_MAX_TOOL_RESPONSE_CHARS] + "...(truncated)"
+    return text[:max_chars] + "...(truncated)"

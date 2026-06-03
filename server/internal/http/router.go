@@ -33,6 +33,8 @@ const (
 	lowMemoryWarningThreshold = 0.15
 	// defaultCodeWriteTimeoutSeconds bounds copy + optional pre-commit + docker quality + build.
 	defaultCodeWriteTimeoutSeconds = 120
+	// defaultReadOpMaxOutputBytes fits large slim.xml placeholders (~60–80KiB) in one read_sandbox call.
+	defaultReadOpMaxOutputBytes = 256 * 1024
 )
 
 type healthResponse struct {
@@ -1061,7 +1063,7 @@ func (r *Router) readOp(w stdhttp.ResponseWriter, req *stdhttp.Request) {
 	}
 	maxOutputBytes := body.MaxOutputBytes
 	if maxOutputBytes <= 0 {
-		maxOutputBytes = 128 * 1024
+		maxOutputBytes = defaultReadOpMaxOutputBytes
 	}
 
 	commandLine := buildReadCommandLine(command, body.Args, body.Cwd)

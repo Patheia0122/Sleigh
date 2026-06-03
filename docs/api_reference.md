@@ -343,15 +343,17 @@ Request body:
 - `command` (required, allowlisted)
 - `args` (optional)
 - `cwd` (optional)
-- `timeout_seconds` (optional)
-- `max_output_bytes` (optional)
-- `max_lines` (optional)
+- `timeout_seconds` (optional; default **10**)
+- `max_output_bytes` (optional; default **262144** / 256KiB per stream when omitted — sized for full slim.xml placeholder files ~60–80KiB)
+- `max_lines` (optional; no line cap when omitted)
 - `output_offset` (optional)
 
 Response fields:
 - `status`, `duration_ms`, `timed_out`, `truncated`
 - `stdout`, `stderr`, `exit_code`, `error`
 - `omitted_bytes`, `next_offset`
+
+When `truncated` is true, increase `max_output_bytes` or read in chunks via allowlisted commands (`sed`, `head`, `tail`, …).
 
 ### 26) `POST /sandboxes/{id}/ops/code/write`
 
